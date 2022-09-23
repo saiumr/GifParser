@@ -37,7 +37,9 @@ int main(int argc, const char** argv) {
 	GIF   *gif = NULL;
 	
 	file_size = GetFileSizeByByte(src_file);
-	gif = GIFParserGetGifDataFromFile(src_file);
+	if ( !GIFParserGetGifDataFromFile(src_file, gif) ) {
+		return -1;
+	}
 	buffer = GIFParserGetDataBufferFromGif(gif);
 	fwrite(buffer, file_size, 1, new_file);
 
