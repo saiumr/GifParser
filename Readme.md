@@ -7,7 +7,8 @@ make creator
 make parser  
 ./parser  
   
-# you should ignore main and target, they are not this project theme, but it useful for analyzing how to parse gif pic. Additionally, they use SDL lib.
+# you should ignore main and target, they are not this project theme, but it is useful for analyzing how to parse gif pic.   
+# Additionally, they use SDL lib.  
 make main  
 ./main  
   
@@ -16,7 +17,7 @@ make target
 ```  
   
 ### `main.exe` operations  
-**WatchOut: main and target uses SDL2, but you should ignore them if you only care about GIF format**  
+**WatchOut: main and target use SDL2, but you should ignore them if you only care about GIF format**  
 `q` for Quit  
 `i` for Information of picture  
   
@@ -48,8 +49,8 @@ Color index amount (Size of Color Table) must be power of 2, assume we use `M` c
 GIF uses index anf color table set each pixel color, color table max amount is $2^{7+1}=256$ because there are 3 bits set size of color table, and there are 3 bits set color resolution(or called it color depth), so GIF color has R(0~255) G(0~255) B(0~255), but it has colors max 256 because of size of color table.  
 
 ### test.gif  
-it created by pragma `gif_creator` for parsed by pragma `gif_parser`  
-![automatically generated images](test.gif)
+it created by pragma `gif_creator`, and it will be parsed in pragma `gif_parser`  
+![automatically generated images](test.gif)  
 
 ### Resource  
-![dragon_cat_gif](lm.gif)  
+![dragon_cat_gif](lm.gif)   
