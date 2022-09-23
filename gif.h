@@ -113,7 +113,7 @@ typedef struct GIF_ONE_FRAME_DATA {
 } GIF_ONE_FRAME_DATA;  
 
 // [1 Bytes] trailer (just display struct, this value will be written in GIF structure directly)
-static typedef struct GIF_TRAILER {
+typedef struct GIF_TRAILER {
 	CHAR 										trailer;       																						// end of file 0x3B  ';'
 } GIF_TRAILER;
 // ============================================================ GIF FILE FORMAT =================================================================== //
@@ -130,7 +130,7 @@ typedef struct GIF_IMG_DATA_NODE {
 // GIF IMG DATA
 typedef struct GIF_IMG_DATA {
 	UINT32                        pack_count;
-	GIF_ALL_IMG_DATA_NODE         *header;
+	GIF_IMG_DATA_NODE         *header;
 } GIF_IMG_DATA;
 
 // GIF
