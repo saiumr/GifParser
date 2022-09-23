@@ -48,6 +48,33 @@ typedef
 int
 (*PARSER_ALL_DELAY)();
 
+
+
+typedef struct {
+  // Header Block [6Bytes]
+  char CharG;       // 'G'
+  char CharI;       // 'I'
+  char CharF;       // 'F'   Signature
+  char Version[3];  // "89a" or "87a"
+  
+  // Logical Screen Descriptor [7Bytes]
+  unsigned short CanvasWidth;    // ignore
+  unsigned short CanvasHeight;   // ignore
+  struct {
+    char SizeOfGlobalTable : 3;
+    char SortFlag : 1;
+    char ColorResolution : 3;
+    char GlobalColorTableFlag : 1;
+  } PackedFiled;
+  
+  char BackgroundColorIndex;     // ignore
+  char PixelAspectRatio;
+
+  // Global Color Table
+  
+
+}PARSER_GIF_STRUCT;
+
 // Public Members
 // This structure should be singleton, so...there isn't pointer to itself in member functions parameters.
 struct _PARSER_ALL

@@ -1,3 +1,4 @@
 .vscode
 SDL2_image
 *.exe
+SDL2

@@ -15,6 +15,11 @@ bool IsKeyDown_(SDL_Scancode key);
 void OnKeyDown_();
 
 // Private Members
+struct PicInfo {
+  long long size;  // should be view by KB
+
+} PicInfo;
+
 struct GifFrames
 {
   SDL_Texture    **frames;
@@ -45,6 +50,9 @@ void OnKeyDown_() {
   if (IsKeyDown_(SDL_SCANCODE_Q)) {
     printf("byebye!\n");
     ParserQuit();
+  }
+  if (IsKeyDown_(SDL_SCANCODE_I)) {
+    printf("size = %d\n KB", PicInfo.size);
   }
 }
 
@@ -89,6 +97,7 @@ bool ParserInit(const char* title, int x, int y, int w, int h, bool fullscreen) 
 
   IMG_FreeAnimation(animation);
   SDL_FreeRW(file);
+  SDL_RWclose(file);
 
   return true;
 }
