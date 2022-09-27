@@ -8,7 +8,7 @@ make parser
 ./parser  
   
 # you should ignore main and target, they are not this project theme, but it is useful for analyzing how to parse gif pic.   
-# Additionally, they use SDL lib.  
+# Additionally, they use SDL lib. Watch out sdl lib path, you should change it.  
 make main  
 ./main  
   

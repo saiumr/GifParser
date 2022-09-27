@@ -20,7 +20,7 @@ typedef struct GIF_EXTENSION_HEADER {
 typedef struct GIF_DATA_SUB_BLOCK_NODE {
   UINT8                       data_size;                                            // 0x01~0xFF
   UINT8                       data[255];                                            // Max 0xFF
-  struct GIF_DATA_SUB_BLOCK   *next;
+  struct GIF_DATA_SUB_BLOCK_NODE   *next;
 } GIF_DATA_SUB_BLOCK_NODE;
 
 typedef struct GIF_DATA_SUB_BLOCK {
@@ -39,7 +39,7 @@ typedef struct GIF_HEADER {
 typedef struct GIF_LOGICAL_SCREEN_DESCRIPTOR {
 	UINT16    canvas_width;																														// usually same as img width
   UINT16    canvas_height;																													// usually same as img height
-	CHAR      flag_table_size : 3;                                                          // size of global table
+	CHAR      flag_table_size : 3;                                                    // size of global table
 	CHAR      flag_sort : 1;                                                          // sort flag 
 	CHAR      flag_cr : 3;                                                            // color resolution 
 	CHAR      flag_color_table : 1;                                                   // global color table flag 
@@ -47,7 +47,7 @@ typedef struct GIF_LOGICAL_SCREEN_DESCRIPTOR {
 	CHAR      aspect_ratio;																														// usually 0
 } GIF_LOGICAL_SCREEN_DESCRIPTOR;
 
-// global/local color table, its amount depends on size of global/local table 2^(N+1) -> 0~255
+// global/local color table, its amount depends on size of global/local table 2^(N+1) -> 0~255 (flag_table_size)
 // global color table
 typedef struct GIF_COLOR_TABLE {
   UINT8 r;
@@ -64,13 +64,13 @@ typedef struct GIF_APP_EXTENSION {
   UINT8                   sub_block_length;                                         // 3 (hex 0x03) Length of Data Sub-Block
 	UINT8                   solid_value;                                              // 1
   UINT16                  loop_number;                                              // 0~65535   0 for forever loop
-	CHAR terminator;                                                                  // 0x00
+	CHAR 										terminator;                                               // 0x00
 } GIF_APP_EXTENSION;
 
 // comment extension                                             
 typedef struct GIF_COMMENT_EXTENSION {
   GIF_EXTENSION_HEADER    header;                                                   // 0xFE21
-  CHAR                    *data_sub_block_buffer;                                   // all NODE data in GIF_DATA_SUB_BLOCK
+  GIF_DATA_SUB_BLOCK      data_sub_block_buffer;                                    // all NODE data in GIF_DATA_SUB_BLOCK
   CHAR                    terminator;                                               // 0x00
 } GIF_COMMENT_EXTENSION;
 
@@ -80,7 +80,7 @@ typedef struct GIF_COMMENT_EXTENSION {
 typedef struct GIF_GC_EXTENSION {
 	GIF_EXTENSION_HEADER    header;                                                   // 0xF921
 	CHAR                    size;                                                     // 0x04
-	CHAR                    flag_transparency_used : 1;                                  // enable/disable transparency, if enable we need set a color key as transparency color
+	CHAR                    flag_transparency_used : 1;                               // enable/disable transparency, if enable we need set a color key as transparency color
 	CHAR                    flag_input : 1;                                           // user input
 	CHAR                    flag_disposal_method : 3;                                 // 0~3 useful, 4~7 reserved for future 
 	CHAR                    flag_reserved : 3;                                        // 000      
@@ -96,7 +96,7 @@ typedef struct GIF_IMAGE_DESCRIPTOR {
 	UINT16                  top;                                                      // image top  
 	UINT16                  width;                                                    // image width
 	UINT16                  height;                                                   // image height
-	CHAR                    flag_table_size : 3;                                            // size of local color table
+	CHAR                    flag_table_size : 3;                                      // size of local color table
 	CHAR                    flag_reserved : 2;                                        // 00      
 	CHAR                    flag_sort : 1;                                            // sort flag
 	CHAR                    flag_interlace : 1;                                       // reduce annoying visual flicker. http://webtutor.tamu.edu/lesson6/interlace.html
@@ -120,16 +120,16 @@ typedef struct GIF_TRAILER {
 
 // GIF IMG DATA NODE
 typedef struct GIF_IMG_DATA_NODE {
-	GIF_GC_EXTENSION              graphics_control_ext;
-	GIF_IMAGE_DESCRIPTOR          image_descriptor;
+	GIF_GC_EXTENSION              graphics_control_ext;      // 8 Bytes
+	GIF_IMAGE_DESCRIPTOR          image_descriptor;          // 10 Bytes
 	GIF_COLOR_TABLE               *local_color_table;
 	GIF_ONE_FRAME_DATA            one_frame_data;
-	struct GIF_ALL_IMG_DATA_NODE  *next;
+	struct GIF_IMG_DATA_NODE      *next;
 } GIF_IMG_DATA_NODE;
 
 // GIF IMG DATA
 typedef struct GIF_IMG_DATA {
-	UINT32                        pack_count;
+	UINT32                    frame_count;
 	GIF_IMG_DATA_NODE         *header;
 } GIF_IMG_DATA;
 
@@ -138,7 +138,7 @@ typedef struct GIF {
 	GIF_HEADER 													Header;                   // 6B
 	GIF_LOGICAL_SCREEN_DESCRIPTOR 			LogicalScreenDescriptor;  // 7B
 	GIF_COLOR_TABLE                     *GlobalColorTable;        // calculate size
-	GIF_APP_EXTENSION                   *ApplicationExt;
+	GIF_APP_EXTENSION                   ApplicationExt;
 	GIF_COMMENT_EXTENSION								*CommentExt;
 	
 	GIF_IMG_DATA                    		ImageData;

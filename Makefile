@@ -6,7 +6,7 @@ SDL2_IMAGE_LIB = "D:/exlibs/SDL_lib/SDL2_image/lib"
 all: parser creator target main
 
 parser:
-	gcc gif_parser.c lzw/lzw.c lzw/lzw_table.c lzw/lzw_bits.c lzw/darray.c -o parser.exe -I"./"
+	gcc gif_parser.c lzw/lzw.c lzw/lzw_table.c lzw/lzw_bits.c lzw/darray.c -g -o parser.exe -I"./"
 
 creator:
 	gcc gif_creator.c lzw/lzw.c lzw/lzw_table.c lzw/lzw_bits.c lzw/darray.c -o creator.exe -I"./"
