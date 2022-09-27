@@ -1,4 +1,4 @@
-## For Analyzing Parse Gif Animation
+## For Analyzing Gif Animation
 ### Compile On Windows (Use [Mingw64](https://winlibs.com/))    
 ```bash  
 make creator  

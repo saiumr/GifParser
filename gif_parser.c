@@ -223,7 +223,7 @@ BOOL _HandleExtension(IN CHAR **src, IN CHAR label, OUT GIF **gif) {
 			p->next = new_node;
 			p = p->next;
 			GIFParserMemRead(&size, (VOID**)src ,1);
-			++( (*gif)->CommentExt->data_sub_block_buffer.block_count );
+			++((*gif)->CommentExt->data_sub_block_buffer.block_count);
 		}
 
 		if (size == 0) {
@@ -253,8 +253,8 @@ BOOL _HandleExtension(IN CHAR **src, IN CHAR label, OUT GIF **gif) {
 			new_node_img->local_color_table = (GIF_COLOR_TABLE *)malloc(sizeof(GIF_COLOR_TABLE) * local_color_table_amount );
 			GIFParserMemRead(new_node_img->local_color_table, (VOID**)src ,sizeof(GIF_COLOR_TABLE) * local_color_table_amount);
 		}
-		GIFParserMemRead(&new_node_img->one_frame_data.LZW_Minimum_Code, (VOID**)src ,1);  // one frame data: LZW_Minimum_Code
-		GIFParserMemRead(&size, (VOID**)src ,1);																			     // size is data_size
+		GIFParserMemRead(&new_node_img->one_frame_data.LZW_Minimum_Code, (VOID**)src, 1);  // one frame data: LZW_Minimum_Code
+		GIFParserMemRead(&size, (VOID**)src, 1);																			     // size is data_size
 		while (size > 0) {																												   	     // one frame data: data_sub_block_buffer
 			GIF_DATA_SUB_BLOCK_NODE *new_node = (GIF_DATA_SUB_BLOCK_NODE *)malloc(sizeof(GIF_DATA_SUB_BLOCK_NODE));
 			new_node->next = NULL;
@@ -262,8 +262,8 @@ BOOL _HandleExtension(IN CHAR **src, IN CHAR label, OUT GIF **gif) {
 			GIFParserMemRead(new_node->data, (VOID**)src, size);
 			p->next = new_node;
 			p = p->next;
-			GIFParserMemRead(&size, (VOID**)src ,1);
-			++( new_node_img->one_frame_data.data_sub_block_buffer.block_count );
+			GIFParserMemRead(&size, (VOID**)src, 1);
+			++(new_node_img->one_frame_data.data_sub_block_buffer.block_count);
 		}
 
 		if (size == 0) {  // one frame data: terminator, the last size is terminator = 0
@@ -291,23 +291,34 @@ BOOL _HandleExtension(IN CHAR **src, IN CHAR label, OUT GIF **gif) {
 BOOL GIFParserClear(IN GIF *gif) {
 	printf("Now function: GIFParserClear\n");
 	if (gif->ImageData.header) {
-		GIF_IMG_DATA_NODE *b, *d;
-		GIF_DATA_SUB_BLOCK_NODE *p, *q;
+		GIF_IMG_DATA_NODE *b = NULL;
+		GIF_IMG_DATA_NODE *d = NULL;
+		GIF_DATA_SUB_BLOCK_NODE *p = NULL;
+		GIF_DATA_SUB_BLOCK_NODE *q = NULL;
+		
 		b = gif->ImageData.header;
 		d = gif->ImageData.header->next;
-		p = gif->ImageData.header->one_frame_data.data_sub_block_buffer.header;
-		q = gif->ImageData.header->one_frame_data.data_sub_block_buffer.header->next;
+		free(b);
+		b = d;
 
 		for (int i = 0; i < gif->ImageData.frame_count; ++i ) {
-			for (int j = 0; j < b->one_frame_data.data_sub_block_buffer.block_count; ++j) {
+			p = d->one_frame_data.data_sub_block_buffer.header;
+			q = p->next;
+			free(p);
+			p = q;
+
+			for (int j = 0; j < d->one_frame_data.data_sub_block_buffer.block_count; ++j) {
+				q = q->next;
 				free(p);
 				p = q;
-				q = q->next;
 			}
-			free(b->local_color_table);
+
+			if (b->local_color_table) {
+				free(b->local_color_table);
+			}
+			d = d->next;
 			free(b);
 			b = d;
-			d = d->next;
 		}
 	}
 
