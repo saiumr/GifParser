@@ -1,4 +1,4 @@
-## GIF Parser
+## For Analyzing Gif Animation
 ### Compile On Windows (Use [Mingw64](https://winlibs.com/))    
 ```bash  
 make creator  
@@ -6,13 +6,26 @@ make creator
 
 make parser  
 ./parser  
+  
+# you should ignore main and target, they are not this project theme, but it is useful for analyzing how to parse gif pic.   
+# Additionally, they use SDL lib. Watch out sdl lib path, you should change it.  
+make main  
+./main  
+  
+make target  
+./target  
 ```  
+  
+### `main.exe` operations  
+**WatchOut: main and target use SDL2, but you should ignore them if you only care about GIF format**  
+`q` for Quit  
+`i` for Information of picture  
   
 ### Docs  
 [Comprehend GIF format - This paper is enough](https://www.ihubin.com/blog/audio-video-basic-17-gif-file-format-detail/)  **Extremely Recommend!!**  
 [GIF Overview1 - English reference "What is GIF"](http://giflib.sourceforge.net/whatsinagif/bits_and_bytes.html)  **Extremely Recommend!!**  
 [GIF Overview2](https://blog.csdn.net/wzy198852/article/details/17266507)  
-[How to storage image in GIF - LZW Compression](http://giflib.sourceforge.net/whatsinagif/lzw_image_data.html)  
+[How to storage imgine in GIF - LZW Compression](http://giflib.sourceforge.net/whatsinagif/lzw_image_data.html)  
 [GIF Animation](http://giflib.sourceforge.net/whatsinagif/animation_and_transparency.html)  **Extremely Recommend!!**  
 [GIF Example1](https://blog.csdn.net/GrayOnDream/article/details/123167897) **Recommend!!**  
 [GIF Example2](https://www.jianshu.com/p/38743ef278ac)  
