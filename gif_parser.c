@@ -45,13 +45,14 @@ UINTN GetFileSizeByByte(IN FILE *fp) {
 	return file_size;
 }
 
-BOOL GIFParserGetGifDataFromFile(IN FILE *src, OUT GIF **gif, OUT UINTN *buffer_size) {
+BOOL GIFParserGetGifDataFromFile(IN const CHAR *filename, OUT GIF **gif, OUT UINTN *buffer_size) {
 	printf("Now Function: GIFParserGetGifDataFromFile\n");
 	CHAR   *file_buffer = NULL;           // DO NOT FREE
 	CHAR   *file_buffer_header = NULL;    // free this free file_buffer
 	UINTN  file_size = 0;
 	CHAR   c = 0;
-
+	FILE *src = fopen(filename, "rb");
+	
 	file_size = GetFileSizeByByte(src);
 	*buffer_size = file_size;
 	file_buffer = (CHAR *)malloc(sizeof(CHAR) * file_size);

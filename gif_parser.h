@@ -15,7 +15,7 @@ typedef struct {
 } GIF_PARSER;
 
 UINTN GetFileSizeByByte(IN FILE *fp);
-BOOL  GIFParserGetGifDataFromFile(IN FILE *fp, OUT GIF **gif, OUT UINTN *buffer_size);
+BOOL  GIFParserGetGifDataFromFile(IN const CHAR *filename, OUT GIF **gif, OUT UINTN *buffer_size);
 CHAR  *GIFParserGetDataBufferFromGif(IN GIF *gif, IN UINTN buffer_size);
 BOOL  GIFParserClear(IN GIF *gif);
 

@@ -7,37 +7,36 @@ make creator
 
 # load file to GIF structure and output a same picture from GIF structure  
 make parser  
-./parser.exe \[FileName\]  
+./parser.exe [FileName]  
 ```  
   
 ### Manuals  
-Use `parser.exe \[filename\]` to load file to GIF structure and output a picture. All of gif picture in assets are passed test.  
+Use `parser.exe [filename]` to load file to GIF structure and output a picture. All of gif picture in assets are passed test.  
 The GIF structure mainly consist of Link List.   
 ```C
 typedef struct GIF {
   // File Header - 6Bytes fixed section  
-	GIF_HEADER                          Header;                    
+	GIF_HEADER    Header;                    
   // Logical Screen Descriptor - 7Bytes fixed section  
-	GIF_LOGICAL_SCREEN_DESCRIPTOR 			LogicalScreenDescriptor;   
+	GIF_LOGICAL_SCREEN_DESCRIPTOR   LogicalScreenDescriptor;   
   // Global Color Table - need to calculate size  
-	GIF_COLOR_TABLE                     *GlobalColorTable;         
+	GIF_COLOR_TABLE   *GlobalColorTable;         
   // Application extension      - link list header  
-	GIF_APP_EXT_DATA                    *AppExtHeader;             
+	GIF_APP_EXT_DATA    *AppExtHeader;             
   // Comment extension          - link list header  
-	GIF_COMMENT_EXT_DATA								*CommentExtHeader;         
+	GIF_COMMENT_EXT_DATA    *CommentExtHeader;         
   // Graphics Control extension - link list header  
-	GIF_GRAPHICS_EXT_DATA               *GraphicsExtHeader;        
+	GIF_GRAPHICS_EXT_DATA   *GraphicsExtHeader;        
   // ImageData extension        - link list header  
-	GIF_IMAGE_DATA                      *ImageDataHeader;          
+	GIF_IMAGE_DATA    *ImageDataHeader;          
   // Record extension and image data order in file   
-	GIF_COMPONENT_DATA                  ComponentOrder;            
+	GIF_COMPONENT_DATA    ComponentOrder;            
   // End label - 1Bytes fixed section, the value = 0x3B  ';'  
-	CHAR                                trailer;  								 
+	CHAR    trailer;  								 
 } GIF;
 ```  
 When we load gif file, we record order of extension and image data in `ComponentOrder` (all of them have their mark), and when we get file from gif structure, we load data via `ComponentOrder`.  
-
-
+  
 ### Reference  
 [Comprehend GIF format - This paper is enough](https://www.ihubin.com/blog/audio-video-basic-17-gif-file-format-detail/)  **Extremely Recommend!!**  
 [GIF Overview1 - English reference "What is GIF"](http://giflib.sourceforge.net/whatsinagif/bits_and_bytes.html)  **Extremely Recommend!!**  
