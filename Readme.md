@@ -70,3 +70,16 @@ it created by pragma `gif_creator`, and it will be parsed in pragma `gif_parser`
 
 ### Resource  
 ![dragon_cat_gif](lm.gif)   
+![kof](assets/1kof.gif)  
+![catcut](assets/2catcut.gif)  
+![catboom](assets/3catboom.gif)  
+![catpick](assets/4catpick.gif)  
+![ooqq](assets/5ooqq.gif)  
+![dance](assets/6dance.gif)  
+![friends](assets/7friends.gif)  
+![yori](assets/8yori.gif)  
+![look](assets/9look.gif)  
+![flower](assets/10flower.gif)  
+![plane](assets/11plane.gif)  
+![eat](assets/12eat.gif)  
+![logo](assets/13logo.gif)  
