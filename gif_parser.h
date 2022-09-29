@@ -4,14 +4,8 @@
 #include <stdbool.h>
 #include "gif.h"
 
-#define IN 
-#define OUT 
-#define TRUE true
-#define FALSE false
 
-typedef long  UINTN;
-typedef void  VOID;
-typedef bool BOOL;
+
 
 typedef struct {
 	UINT32    w, h;

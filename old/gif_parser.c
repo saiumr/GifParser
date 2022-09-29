@@ -34,7 +34,7 @@ VOID _PrintBuffer(IN CHAR *buffer, IN UINTN len);
 
 // Just started
 int main(int argc, const char** argv) {
-	FILE  *src_file = fopen("lm.gif", "rb");
+	FILE  *src_file = fopen("../assets/7friends.gif", "rb");
 	FILE  *new_file = fopen("parse_test.gif", "wb");
 	UINTN buffer_size = 0;
 	UINTN file_size = 0;

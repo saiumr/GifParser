@@ -1,6 +1,9 @@
 .vscode
 SDL2_image
-old/*.exe
 SDL2
+old/*.raw
+old/*.exe
 *.raw
 *.exe
+assets/sun.gif
+parser_output.gif

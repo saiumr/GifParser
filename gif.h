@@ -5,10 +5,19 @@
 
 #pragma pack(1)
 
+
+#define IN 
+#define OUT 
+#define TRUE true
+#define FALSE false
+
 typedef uint8_t   CHAR;
 typedef uint8_t   UINT8;
 typedef uint16_t  UINT16;
 typedef uint32_t  UINT32;
+typedef bool      BOOL;
+typedef long      UINTN;
+typedef void      VOID;
 
 //extension block header
 typedef struct GIF_EXTENSION_HEADER {
@@ -55,15 +64,17 @@ typedef struct GIF_COLOR_TABLE {
   UINT8 b;
 } GIF_COLOR_TABLE;
 
-// [19 Bytes] application extension                                         
+// [19 Bytes Usually] application extension  (14 Bytes solid)                                       
 typedef struct GIF_APP_EXTENSION {
 	GIF_EXTENSION_HEADER    header;                                                   // 0xFF21
 	UINT8                   size;                                                     // 11 (hex 0x0B) Length of Application Block
 	CHAR                    identifier[8];                                            // "NETSCAPE"
 	CHAR                    authentication_code[3];                                   // "2.0"
-  UINT8                   sub_block_length;                                         // 3 (hex 0x03) Length of Data Sub-Block
-	UINT8                   solid_value;                                              // 1
-  UINT16                  loop_number;                                              // 0~65535   0 for forever loop
+	GIF_DATA_SUB_BLOCK      data_sub_block_buffer;
+	/* Normal format like under members */
+  // UINT8                   sub_block_length;                                      // 3 (hex 0x03) Length of Data Sub-Block
+	// UINT8                   solid_value;                                           // 1
+  // UINT16                  loop_number;                                           // 0~65535   0 for forever loop
 	CHAR 										terminator;                                               // 0x00
 } GIF_APP_EXTENSION;
 
@@ -74,10 +85,10 @@ typedef struct GIF_COMMENT_EXTENSION {
   CHAR                    terminator;                                               // 0x00
 } GIF_COMMENT_EXTENSION;
 
-// plain text extension - GIF89 (This feature never took off)    // 0x0121
+// plain text extension - GIF89 (This feature never took off)    										// 0x0121
 
-// [8 Bytes] graphic control extension                                      
-typedef struct GIF_GC_EXTENSION {
+// [8 Bytes] graphic control extension                                      				
+typedef struct GIF_GRAPHICS_CONTROL_EXTENSION {
 	GIF_EXTENSION_HEADER    header;                                                   // 0xF921
 	CHAR                    size;                                                     // 0x04
 	CHAR                    flag_transparency_used : 1;                               // enable/disable transparency, if enable we need set a color key as transparency color
@@ -87,7 +98,7 @@ typedef struct GIF_GC_EXTENSION {
 	UINT16                  delay_time;                                               // 1/100 s
 	CHAR                    transparent_color_index;                                  // transparency color key
 	CHAR                    terminator;                                               // 0x00
-} GIF_GC_EXTENSION;
+} GIF_GRAPHICS_CONTROL_EXTENSION;
 
 // [10 Bytes] image descriptor
 typedef struct GIF_IMAGE_DESCRIPTOR {
@@ -118,31 +129,56 @@ typedef struct GIF_TRAILER {
 } GIF_TRAILER;
 // ============================================================ GIF FILE FORMAT =================================================================== //
 
-// GIF IMG DATA NODE
-typedef struct GIF_IMG_DATA_NODE {
-	GIF_GC_EXTENSION              graphics_control_ext;      // 8 Bytes
-	GIF_IMAGE_DESCRIPTOR          image_descriptor;          // 10 Bytes
-	GIF_COLOR_TABLE               *local_color_table;
-	GIF_ONE_FRAME_DATA            one_frame_data;
-	struct GIF_IMG_DATA_NODE      *next;
-} GIF_IMG_DATA_NODE;
+
+// GIF APP EXT DATA
+typedef struct GIF_APP_EXT_DATA {
+	GIF_APP_EXTENSION  				app;
+	struct GIF_APP_EXT_DATA 	*next;
+} GIF_APP_EXT_DATA;
+
+typedef struct GIF_COMMENT_EXT_DATA {
+	GIF_COMMENT_EXTENSION  				comment;
+	struct GIF_COMMENT_EXT_DATA 	*next;
+} GIF_COMMENT_EXT_DATA;
+
+// GIF GRAPHICS CONTROL EXT DATA 
+typedef struct GIF_GRAPHICS_EXT_DATA {
+	GIF_GRAPHICS_CONTROL_EXTENSION  graphics;      // 8 Bytes
+	struct GIF_GRAPHICS_EXT_DATA 		*next;
+} GIF_GRAPHICS_EXT_DATA;
 
 // GIF IMG DATA
-typedef struct GIF_IMG_DATA {
-	UINT32                    frame_count;
-	GIF_IMG_DATA_NODE         *header;
-} GIF_IMG_DATA;
+typedef struct GIF_IMAGE_DATA {
+	GIF_IMAGE_DESCRIPTOR          	image_descriptor;          // 10 Bytes
+	GIF_COLOR_TABLE               	*local_color_table;
+	GIF_ONE_FRAME_DATA            	one_frame_data;
+	struct GIF_IMAGE_DATA         	*next;
+} GIF_IMAGE_DATA;
+
+// Extension and image data order in gif file
+typedef enum GIF_COMPONENT {
+	kAppExt,
+	kCommentExt,
+	kGraphicsExt,
+	kImageData
+} GIF_COMPONENT;
+
+typedef struct GIF_COMPONENT_DATA {
+	GIF_COMPONENT  *component;
+	UINTN 				 size;	
+} GIF_COMPONENT_DATA;
 
 // GIF
 typedef struct GIF {
-	GIF_HEADER 													Header;                   // 6B
-	GIF_LOGICAL_SCREEN_DESCRIPTOR 			LogicalScreenDescriptor;  // 7B
-	GIF_COLOR_TABLE                     *GlobalColorTable;        // calculate size
-	GIF_APP_EXTENSION                   ApplicationExt;
-	GIF_COMMENT_EXTENSION								*CommentExt;
-	
-	GIF_IMG_DATA                    		ImageData;
-	CHAR                                trailer;  // 0x3B  ';'
+	GIF_HEADER 													Header;                    // 6B
+	GIF_LOGICAL_SCREEN_DESCRIPTOR 			LogicalScreenDescriptor;   // 7B
+	GIF_COLOR_TABLE                     *GlobalColorTable;         // calculate size
+	GIF_APP_EXT_DATA                    *AppExtHeader;
+	GIF_COMMENT_EXT_DATA								*CommentExtHeader;
+	GIF_GRAPHICS_EXT_DATA               *GraphicsExtHeader;
+	GIF_IMAGE_DATA                      *ImageDataHeader;
+	GIF_COMPONENT_DATA                  ComponentOrder;
+	CHAR                                trailer;  								 // value = 0x3B  ';'
 } GIF;
 
 #endif
