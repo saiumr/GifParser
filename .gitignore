@@ -7,3 +7,9 @@ old/*.exe
 *.exe
 assets/sun.gif
 parser_output.gif
+note.txt
+log*
+frames/*
+!frames/2*
+!frames/5*
+!frames/8*

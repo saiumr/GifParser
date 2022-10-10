@@ -87,6 +87,19 @@ int main(int argc, const char **argv) {
     fclose(raw);
 
     lzw_compress_gif(3, 700*700, gif_one_frame_raw, &compressed_size, &img);  // 3 is LZW Minimum Code Size (see Docs "What is GIF")
+    printf("compress_len = %u\n", compressed_size);
+    
+    uint8_t *gif_raw = malloc(700*700);
+    unsigned long raw_len = 0;
+    lzw_decompress(3, 700*700, img, &raw_len, &gif_raw);
+    printf("raw_len = %d\n", raw_len);
+    FILE *gif_res = fopen("gif_raw_res.raw", "ab");
+    fwrite(gif_raw, 700*700, 1, gif_res);
+    fflush(gif_res);
+    fclose(gif_res);
+
+    printf("size img = %u, compress_size = %u", sizeof(img), compressed_size);
+    
     printf("current frame compression size: %ld\n", compressed_size);
     fputc(0x03, fp);  // 3 is LZW Minimum Code Size (see Docs "What is GIF")
     unsigned long current_index = 0;
@@ -97,19 +110,18 @@ int main(int argc, const char **argv) {
         // In GIF, data sub-block (block followed LZW minimum code size) could repeat many time, and first byte is size of sub-block, it should be 0~0xFF   
         if((current_index + 0xFF) >= compressed_size) {             // compress_size < 255, directly writing in file else press 0xFF bytes in file looped.
             unsigned long diff = compressed_size - current_index;  
-            fputc(diff, fp);
-            fwrite(img+current_index, diff, 1, fp);
+            fputc(diff, fp);                          // data size
+            fwrite(img+current_index, diff, 1, fp);   // data
             fputc(0x00, fp);
             current_index += diff;
         } else {
-            fputc(0xFF, fp);
-            fwrite(img+current_index, 0xFF, 1, fp);
+            fputc(0xFF, fp);                          // data size
+            fwrite(img+current_index, 0xFF, 1, fp);   // data
             current_index += 0xFF;
         }
     }
     free(gif_one_frame_raw);
     free(img);
-    
   }
 
   fputc(0x3B, fp);

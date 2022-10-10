@@ -16,7 +16,7 @@ typedef uint8_t   UINT8;
 typedef uint16_t  UINT16;
 typedef uint32_t  UINT32;
 typedef bool      BOOL;
-typedef long      UINTN;
+typedef unsigned long UINTN;
 typedef void      VOID;
 
 //extension block header
@@ -33,7 +33,7 @@ typedef struct GIF_DATA_SUB_BLOCK_NODE {
 } GIF_DATA_SUB_BLOCK_NODE;
 
 typedef struct GIF_DATA_SUB_BLOCK {
-  UINT32                    block_count;                                            // if block_count > 1 then there are block_count - 1 NODE.size = 255
+  UINTN                     total_data_size;                                            // if block_count > 1 then there are block_count - 1 NODE.size = 255
   GIF_DATA_SUB_BLOCK_NODE   *header;
 } GIF_DATA_SUB_BLOCK;
 
@@ -52,7 +52,7 @@ typedef struct GIF_LOGICAL_SCREEN_DESCRIPTOR {
 	CHAR      flag_sort : 1;                                                          // sort flag 
 	CHAR      flag_cr : 3;                                                            // color resolution 
 	CHAR      flag_color_table : 1;                                                   // global color table flag 
-	CHAR      bg_color_index;																													// usually 0
+	UINT8     bg_color_index;																													// usually 0
 	CHAR      aspect_ratio;																														// usually 0
 } GIF_LOGICAL_SCREEN_DESCRIPTOR;
 
@@ -110,7 +110,7 @@ typedef struct GIF_IMAGE_DESCRIPTOR {
 	CHAR                    flag_table_size : 3;                                      // size of local color table
 	CHAR                    flag_reserved : 2;                                        // 00      
 	CHAR                    flag_sort : 1;                                            // sort flag
-	CHAR                    flag_interlace : 1;                                       // reduce annoying visual flicker. http://webtutor.tamu.edu/lesson6/interlace.html
+	CHAR                    flag_interlace : 1;                                       // Interlace Flag
 	CHAR                    flag_color_table : 1;                                     // enable/disable local color table
 } GIF_IMAGE_DESCRIPTOR;
 
@@ -178,6 +178,7 @@ typedef struct GIF {
 	GIF_GRAPHICS_EXT_DATA               *GraphicsExtHeader;
 	GIF_IMAGE_DATA                      *ImageDataHeader;
 	GIF_COMPONENT_DATA                  ComponentOrder;
+	UINTN                               FramesCount;
 	CHAR                                trailer;  								 // value = 0x3B  ';'
 } GIF;
 

@@ -8,6 +8,6 @@ creator:
 
 
 clean:
-	del *.exe *.raw
+	del *.exe *.raw .\frames\sun*
 
 .PHONY: clean

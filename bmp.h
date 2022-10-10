@@ -17,7 +17,7 @@ typedef struct {
   UINT32    ImageOffset;        // address offset start with 0x00 to image data, always 0x36 [image header is 54 Bytes, image data follow it]
   
   // [40 Bytes] BMP information header
-  UINT32    InfoHeaderSize;     // always 0x28 
+  UINT32    InfoHeaderSize;     // 24bit for b,g,r pic always value = 0x28 
   UINT32    PixelWidth;         // image width
   UINT32    PixelHeight;        // image height
   UINT16    Planes;             // Must be 1
@@ -30,5 +30,5 @@ typedef struct {
   UINT32    ImportantColors;    // 0 for all color is important
 } BMP_IMAGE_HEADER;
 // here should be image data, start address = 0x36 + 1
-
+// BMP storage color order is b, g, r
 #endif
