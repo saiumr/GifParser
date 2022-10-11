@@ -9,6 +9,7 @@ assets/sun.gif
 parser_output.gif
 note.txt
 log*
+new_test_img
 frames/*
 !frames/2*
 !frames/5*
