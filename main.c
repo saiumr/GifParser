@@ -74,13 +74,13 @@ done:
 	free(buffer);
 	fclose(new_file);
 	GIFParserClear(gif);
-	GIFParserClearAnimation(animation);
 	if (frame_buffer) {
 		for (UINTN i = 0; i < animation->count; ++i) {
 			if (frame_buffer[i]) free(frame_buffer[i]);
 		}
 		free(frame_buffer);
 	}
+	GIFParserClearAnimation(animation);
 	
 	printf("- Done -\n");
 
