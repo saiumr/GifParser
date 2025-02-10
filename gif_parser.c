@@ -11,15 +11,11 @@ UINT16  gAllocComponentCount = 1;
 
 
 UINTN _GetFileSizeByByte(IN FILE *fp);
-
 // read memory and move file pointer 
 BOOL _GIFParserMemRead(OUT VOID *dst, IN VOID **src, IN UINT32 size); 
-
 BOOL _HandleExtension(IN CHAR **src, IN CHAR label, OUT GIF **gif);
 BOOL _HandleImageData(IN CHAR **src, OUT GIF **gif);
-
 VOID _RecordComponentOrder(IN GIF_COMPONENT key, OUT GIF **gif);
-
 VOID _PrintBuffer(IN CHAR *buffer, IN UINTN len);								 
 
 typedef struct {
@@ -31,8 +27,8 @@ typedef struct {
 
 _GIF_TAILER_POINTER gTailerPointer;
 
-UINT8  *GIFParserAnimationFramesTransformBMP(IN IMG_ANIMATION *animation, IN UINTN frame_index, OUT UINTN *frame_size) {
-	printf("Now function: GIFParserGetAnimationFrames [frame_index = %u]\n", frame_index);
+UINT8  *GIFParserAnimationFramesTransformBMP(IN IMG_ANIMATION *animation, IN UINTN frame_index, OUT UINT32 *frame_size) {
+	printf("Now function: GIFParserGetAnimationFramesTransformBMP [frame_index = %u]\n", frame_index);
 	if (frame_index >= animation->count) {
 		return NULL;
 	}
@@ -97,7 +93,7 @@ UINT8  *GIFParserAnimationFramesTransformBMP(IN IMG_ANIMATION *animation, IN UIN
 BOOL	GIFParserGetAnimationFromFile(IN const CHAR *filename, OUT IMG_ANIMATION **animation) {
 	printf("Now function: GIFParserGetAnimationFromFile\n");
 	GIF   *gif = NULL;
-	UINTN buffer_size = 0;
+	UINT32 buffer_size = 0;
 	if (!GIFParserGetGifDataFromFile(filename, &gif, &buffer_size)) {
 		return FALSE;
 	}
@@ -147,13 +143,14 @@ BOOL	GIFParserGetAnimationFromGif(IN GIF *gif, OUT IMG_ANIMATION **animation) {
 	GIF_COLOR_TABLE transparency_color = {0, 0, 0};
 	GIF_COLOR_TABLE bg_color = {255, 255, 255};
 
-	if (gif->LogicalScreenDescriptor.flag_color_table == 1) {
+	if ((gif->LogicalScreenDescriptor.flag_color_table&0x1) == 1) {
 			bg_color.r = gif->GlobalColorTable[gif->LogicalScreenDescriptor.bg_color_index].r;
 			bg_color.g = gif->GlobalColorTable[gif->LogicalScreenDescriptor.bg_color_index].g;
 			bg_color.b = gif->GlobalColorTable[gif->LogicalScreenDescriptor.bg_color_index].b;
 	}
 
 	while (image != NULL) {
+		printf("frame count: [%u]\n", frame_count);
 		UINTN changed_data_size = image->image_descriptor.width * image->image_descriptor.height;  // exclude non-changed parts
 		UINT8 *changed_color_index_list = (UINT8 *)malloc(changed_data_size);
 		UINT8 *changed_data = (UINT8 *)malloc(sizeof(UINT8) * image->one_frame_data.data_sub_block_buffer.total_data_size);
@@ -171,8 +168,9 @@ BOOL	GIFParserGetAnimationFromGif(IN GIF *gif, OUT IMG_ANIMATION **animation) {
 
 		UINT8 bit_size = image->one_frame_data.LZW_Minimum_Code;
 		UINTN out_changed_data_size = 0;
-		lzw_decompress(bit_size, changed_data_size, changed_data, &out_changed_data_size, &changed_color_index_list);
-		printf("changed_data_index: %u, changed_data_size: %u, out_changed_data_size: %u\n", changed_data_index, changed_data_size, out_changed_data_size);
+		printf("bit_size: %u, changed_data_index: %u, changed_data_size: %u, out_changed_data_size: %u\n",bit_size, changed_data_index, changed_data_size, out_changed_data_size);
+		lzw_decompress(bit_size, changed_data_index, changed_data, &out_changed_data_size, &changed_color_index_list);
+		printf("out_changed_data_size: %u\n", out_changed_data_size);
 
 		// restore color
 		IMG_FRAME *frame = (IMG_FRAME *)malloc(sizeof(IMG_FRAME) * pixel_count);
@@ -180,7 +178,7 @@ BOOL	GIFParserGetAnimationFromGif(IN GIF *gif, OUT IMG_ANIMATION **animation) {
 			return FALSE;
 		}
 
-		if (graphics->graphics.flag_transparency_used == 1) {	
+		if ((graphics->graphics.flag_transparency_used&0x1) == 1) {	
 			if (image->local_color_table) {
 				transparency_color.r = image->local_color_table[graphics->graphics.transparent_color_index].r;
 				transparency_color.g = image->local_color_table[graphics->graphics.transparent_color_index].g;
@@ -193,31 +191,31 @@ BOOL	GIFParserGetAnimationFromGif(IN GIF *gif, OUT IMG_ANIMATION **animation) {
 			}
 		}
 
-		printf("frame count: [%u]\n", frame_count);
 		printf("image data size = %u\n", sizeof(IMG_FRAME) * pixel_count);
 		printf("w = %u, h = %u, delay = %u, left = %u, top = %u\n", image->image_descriptor.width, image->image_descriptor.height, (*animation)->delays, \
 			image->image_descriptor.left, image->image_descriptor.top);
-		if (graphics->graphics.flag_transparency_used == 1)
+		if ((graphics->graphics.flag_transparency_used&0x1) == 1)
 		printf("transparency_color: %u %u %u\n", transparency_color.r, transparency_color.g, transparency_color.b);
-		if (gif->LogicalScreenDescriptor.flag_color_table == 1)
+		if ((gif->LogicalScreenDescriptor.flag_color_table&0x1) == 1)
 		printf("bg_color: %u %u %u\n", bg_color.r, bg_color.g, bg_color.b);
 
 		// In gif every frame's image data depends on previous frame. change changed data, reserved out of changed data back ground color index flush;
 		UINTN global_part_index = 0;
+		static UINT8 test = 0;
 		for (UINTN row = 0; row < (*animation)->h; ++row) {
 			for (UINTN col = 0; col < (*animation)->w; ++col) {
 				if ( col < image->image_descriptor.left || row < image->image_descriptor.top || \
 				  col > image->image_descriptor.left + image->image_descriptor.width - 1 || \
 					row > image->image_descriptor.top + image->image_descriptor.height - 1 ) {
-					switch (graphics->graphics.flag_disposal_method) {
+					switch (graphics->graphics.flag_disposal_method&0x7) {
 					// reserved previous frame pixels 
 					case 0x01:
 					{
 						if (frame_count == 0) {
-							if (graphics->graphics.flag_transparency_used == 1) {
+							if ((graphics->graphics.flag_transparency_used&0x1) == 1) {
 								color_index_list[row * (*animation)->w + col] = graphics->graphics.transparent_color_index;
 							}
-							else if(gif->LogicalScreenDescriptor.flag_color_table == 1) {
+							else if((gif->LogicalScreenDescriptor.flag_color_table&0x1) == 1) {
 								color_index_list[row * (*animation)->w + col] = gif->LogicalScreenDescriptor.bg_color_index;
 							}
 						}
@@ -227,10 +225,10 @@ BOOL	GIFParserGetAnimationFromGif(IN GIF *gif, OUT IMG_ANIMATION **animation) {
 					// repainted out of image range
 					case 0x02:
 					{
-						if (graphics->graphics.flag_transparency_used == 1) {
+						if ((graphics->graphics.flag_transparency_used&0x1) == 1) {
 							color_index_list[row * (*animation)->w + col] = graphics->graphics.transparent_color_index;
 						}
-						else if(gif->LogicalScreenDescriptor.flag_color_table == 1) {
+						else if((gif->LogicalScreenDescriptor.flag_color_table&0x1) == 1) {
 							color_index_list[row * (*animation)->w + col] = gif->LogicalScreenDescriptor.bg_color_index;
 						}
 					}
@@ -242,17 +240,28 @@ BOOL	GIFParserGetAnimationFromGif(IN GIF *gif, OUT IMG_ANIMATION **animation) {
 					}
 				}
 				else if (frame_count != 0) {
-					switch (graphics->graphics.flag_disposal_method) {
+					switch (graphics->graphics.flag_disposal_method&0x7) {
 					// reserved transparent pixel as previous frame pixel 			
 					case 0x01:
 					{
-						if ( graphics->graphics.flag_transparency_used == 1 && graphics->graphics.transparent_color_index == changed_color_index_list[global_part_index] )  {
+						if (frame_count == 89 && row == 202 && col == 274) {
+								printf("89: Here 281, r/c:[%u, %u] v: %02x, index: %02x\n", row, col, changed_color_index_list[global_part_index], global_part_index);
+								printf("method: %03x\n", graphics->graphics.flag_disposal_method&0x7);
+								test++;
+								if ((graphics->graphics.flag_transparency_used&0x1) == 1 && graphics->graphics.transparent_color_index == changed_color_index_list[global_part_index]) {
+									printf("Yes!\n");
+								}
+								else {
+									printf("No!\n");
+								}
+							}
+						if ( (graphics->graphics.flag_transparency_used&0x1) == 1 && graphics->graphics.transparent_color_index == changed_color_index_list[global_part_index] )  {
 							if (color_index_kind[row * (*animation)->w + col] == GLOBAL_COLOR) {
 								frame[row * (*animation)->w + col].r = gif->GlobalColorTable[color_index_list[row * (*animation)->w + col]].r;
 								frame[row * (*animation)->w + col].g = gif->GlobalColorTable[color_index_list[row * (*animation)->w + col]].g;
 								frame[row * (*animation)->w + col].b = gif->GlobalColorTable[color_index_list[row * (*animation)->w + col]].b;
 							}
-							else if (prev_image->image_descriptor.flag_color_table == 1) {
+							else if ( (prev_image->image_descriptor.flag_color_table&0x1) == 1) {
 								frame[row * (*animation)->w + col].r = prev_image->local_color_table[color_index_list[row * (*animation)->w + col]].r;
 								frame[row * (*animation)->w + col].g = prev_image->local_color_table[color_index_list[row * (*animation)->w + col]].g;
 								frame[row * (*animation)->w + col].b = prev_image->local_color_table[color_index_list[row * (*animation)->w + col]].b;
@@ -291,13 +300,13 @@ BOOL	GIFParserGetAnimationFromGif(IN GIF *gif, OUT IMG_ANIMATION **animation) {
 					++global_part_index;
 				}
 
-				if (image->image_descriptor.flag_color_table == 1) {
+				if ((image->image_descriptor.flag_color_table&0x1) == 1) {
 					frame[row * (*animation)->w + col].r = image->local_color_table[color_index_list[row * (*animation)->w + col]].r;
 					frame[row * (*animation)->w + col].g = image->local_color_table[color_index_list[row * (*animation)->w + col]].g;
 					frame[row * (*animation)->w + col].b = image->local_color_table[color_index_list[row * (*animation)->w + col]].b;
 					color_index_kind[row * (*animation)->w + col] = LOCAL_COLOR;
 				}
-				else if (gif->LogicalScreenDescriptor.flag_color_table == 1) {
+				else if ((gif->LogicalScreenDescriptor.flag_color_table&0x1) == 1) {
 					frame[row * (*animation)->w + col].r = gif->GlobalColorTable[color_index_list[row * (*animation)->w + col]].r;
 					frame[row * (*animation)->w + col].g = gif->GlobalColorTable[color_index_list[row * (*animation)->w + col]].g;
 					frame[row * (*animation)->w + col].b = gif->GlobalColorTable[color_index_list[row * (*animation)->w + col]].b;
@@ -311,7 +320,7 @@ BOOL	GIFParserGetAnimationFromGif(IN GIF *gif, OUT IMG_ANIMATION **animation) {
 		// Group1: every 8 lines, start by line 4
 		// Group2: every 4 lines, start by line 2
 		// Group3: every 2 lines, start by line 1
-		if (image->image_descriptor.flag_interlace == 1) {
+		if ((image->image_descriptor.flag_interlace&0x1) == 1) {
 			IMG_FRAME *frame_raw = (IMG_FRAME *)malloc(sizeof(IMG_FRAME) * pixel_count);
 			UINTN interlace_frame_line = 0;
 			for (UINTN group = 0; group < 4; ++group) {
@@ -386,7 +395,7 @@ BOOL	GIFParserClearAnimation(IN IMG_ANIMATION *animation) {
 	return TRUE;
 }
 
-BOOL  GIFParserGetGifDataFromFile(IN const CHAR *filename, OUT GIF **gif, OUT UINTN *buffer_size) {
+BOOL  GIFParserGetGifDataFromFile(IN const CHAR *filename, OUT GIF **gif, OUT UINT32 *buffer_size) {
 	printf("Now Function: GIFParserGetGifDataFromFile\n");
 	CHAR   *file_buffer = NULL;           // DO NOT FREE
 	CHAR   *file_buffer_header = NULL;    // free this free file_buffer
@@ -425,7 +434,7 @@ BOOL  GIFParserGetGifDataFromFile(IN const CHAR *filename, OUT GIF **gif, OUT UI
 	(*gif)->CommentExtHeader->next = NULL;
 	gTailerPointer.comment = (*gif)->CommentExtHeader;
 
-	(*gif)->GraphicsExtHeader = (GIF_GRAPHICS_EXT_DATA *)malloc(sizeof(GIF_GRAPHICS_CONTROL_EXTENSION));
+	(*gif)->GraphicsExtHeader = (GIF_GRAPHICS_EXT_DATA *)malloc(sizeof(GIF_GRAPHICS_EXT_DATA));
 	(*gif)->GraphicsExtHeader->next = NULL;
 	gTailerPointer.graphics = (*gif)->GraphicsExtHeader;
 
@@ -912,10 +921,9 @@ UINTN _GetFileSizeByByte(IN FILE *fp) {
 }
 
 VOID _PrintBuffer(IN CHAR *buffer, IN UINTN len) {
-	FILE *fp = fopen("log", "ab");
-	for (int i = 0; i < len; ++i) {
-		fwrite(buffer+i, 1, 1, fp);
-	}
+	FILE *fp = fopen("log.gif", "wb");
+	fwrite(buffer, len, 1, fp);
+
 	fclose(fp);
 }
 

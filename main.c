@@ -10,7 +10,7 @@ int main(int argc, const char** argv) {
 	}
 	const CHAR  *src_file = argv[1];
 	CHAR  *frame_file = (CHAR *)argv[1];
-	UINTN buffer_size = 0;
+	UINT32 buffer_size = 0;
 	FILE  *new_file = fopen("parser_output.gif", "wb");
 	UINT8 *buffer = NULL;
 	GIF   *gif = NULL;
@@ -27,7 +27,7 @@ int main(int argc, const char** argv) {
 	if ( !GIFParserGetAnimationFromFile(src_file, &animation) ) {
 		goto done;
 	}
-	UINT8 **frame_buffer = (UINT8 **)malloc(animation->count * sizeof(UINT8 **));
+	UINT8 **frame_buffer = (UINT8 **)malloc(animation->count * sizeof(UINT8 *));
 	if (frame_buffer == NULL) {
 		goto done;
 	}
@@ -55,8 +55,8 @@ int main(int argc, const char** argv) {
 	CHAR filepath[32] = "./frames/";
 	CHAR str_count[16] = {0};
 	CHAR file[32] = {0};
-	for (UINTN i = 0; i < animation->count; ++i) {
-		UINTN frame_size = 0;
+	for (UINT32 i = 0; i < animation->count; ++i) {
+		UINT32 frame_size = 0;
 		frame_buffer[i] = GIFParserAnimationFramesTransformBMP(animation, i, &frame_size);
 		sprintf(str_count, "%u", i);
 		strcat(str_count, ".bmp");
@@ -74,13 +74,13 @@ done:
 	free(buffer);
 	fclose(new_file);
 	GIFParserClear(gif);
-	GIFParserClearAnimation(animation);
 	if (frame_buffer) {
 		for (UINTN i = 0; i < animation->count; ++i) {
 			if (frame_buffer[i]) free(frame_buffer[i]);
 		}
 		free(frame_buffer);
 	}
+	GIFParserClearAnimation(animation);
 	
 	printf("- Done -\n");
 
