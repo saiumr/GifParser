@@ -1,13 +1,13 @@
-#ifndef _BMP_
-#define _BMP_
+#ifndef BMP_H
+#define BMP_H
 
 #include <stdint.h>
-#pragma pack(1)
 
 typedef uint8_t   CHAR;
 typedef uint16_t  UINT16;
 typedef uint32_t  UINT32;
 
+#pragma pack(push, 1)
 typedef struct {
   // [14 Bytes] BMP file header
   CHAR      CharB;              // 'B'
@@ -29,6 +29,7 @@ typedef struct {
   UINT32    NumberOfColors;     // bmp actually used color index amount, 0 for use all color index
   UINT32    ImportantColors;    // 0 for all color is important
 } BMP_IMAGE_HEADER;
+#pragma pack(pop)
 // here should be image data, start address = 0x36 + 1
 // BMP storage color order is b, g, r
 #endif
