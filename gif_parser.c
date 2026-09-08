@@ -494,7 +494,7 @@ BOOL GIFParserGetGifDataFromFile(IN const CHAR *filename, OUT GIF **gif, OUT UIN
     (*gif)->CommentExtHeader->next = NULL;
     gTailerPointer.comment = (*gif)->CommentExtHeader;
 
-    (*gif)->GraphicsExtHeader = (GIF_GRAPHICS_EXT_DATA *)malloc(sizeof(GIF_GRAPHICS_CONTROL_EXTENSION));
+    (*gif)->GraphicsExtHeader = (GIF_GRAPHICS_EXT_DATA *)malloc(sizeof(GIF_GRAPHICS_EXT_DATA));
     (*gif)->GraphicsExtHeader->next = NULL;
     gTailerPointer.graphics = (*gif)->GraphicsExtHeader;
 
