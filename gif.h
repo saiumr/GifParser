@@ -39,7 +39,7 @@ typedef struct GIF_DATA_SUB_BLOCK
     GIF_DATA_SUB_BLOCK_NODE *header;
 } GIF_DATA_SUB_BLOCK;
 
-// ========================================== GIF FILE FORMAT ========================================================= //
+// ================================ GIF FILE FORMAT ==================================== //
 // [6 Bytes] header
 typedef struct GIF_HEADER
 {

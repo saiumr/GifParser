@@ -1,5 +1,9 @@
-## GIF Parser
-### Compile On Windows (Use [Mingw64](https://winlibs.com/))    
+## GIF Parser  
+
+### Compile On Windows  
+
+Use [Mingw64](https://winlibs.com/)  
+
 ```bash  
 # create a gif picture test.gif  
 make creator  
@@ -11,38 +15,44 @@ make parser
 ```  
   
 ### Manuals  
+
 Using `parser.exe [filename]` to load a file when you have passed compile. The `parser.exe` will load GIF file transform it to internal data structure and output a same gif picture, it also decomposes gif to bmp in many frames (or maybe one frame). All of gif picture in assets have passed test, and their frames in folder [`frames`](./frames/) (I just upload those take me a lof of problem, although their frames generated).  
-The GIF structure mainly consist of Link List.   
+The GIF structure mainly consist of Link List.  
+
 ```C
 typedef struct GIF {
   // File Header - 6Bytes fixed section  
-	GIF_HEADER    Header;                    
+  GIF_HEADER    Header;                    
   // Logical Screen Descriptor - 7Bytes fixed section  
-	GIF_LOGICAL_SCREEN_DESCRIPTOR   LogicalScreenDescriptor;   
+  GIF_LOGICAL_SCREEN_DESCRIPTOR   LogicalScreenDescriptor;   
   // Global Color Table - need to calculate size  
-	GIF_COLOR_TABLE   *GlobalColorTable;         
+  GIF_COLOR_TABLE   *GlobalColorTable;         
   // Application extension      - link list header  
-	GIF_APP_EXT_DATA    *AppExtHeader;             
+  GIF_APP_EXT_DATA    *AppExtHeader;             
   // Comment extension          - link list header  
-	GIF_COMMENT_EXT_DATA    *CommentExtHeader;         
+  GIF_COMMENT_EXT_DATA    *CommentExtHeader;         
   // Graphics Control extension - link list header  
-	GIF_GRAPHICS_EXT_DATA   *GraphicsExtHeader;        
+  GIF_GRAPHICS_EXT_DATA   *GraphicsExtHeader;        
   // ImageData extension        - link list header  
-	GIF_IMAGE_DATA    *ImageDataHeader;          
+  GIF_IMAGE_DATA    *ImageDataHeader;          
   // Record extension and image data order in file   
-	GIF_COMPONENT_DATA    ComponentOrder;    
+  GIF_COMPONENT_DATA    ComponentOrder;    
   // Here are how many frames in gif  
   UINTN   FramesCount;        
   // End label - 1Bytes fixed section, the value = 0x3B  ';'  
-	CHAR    trailer;  								 
+  CHAR    trailer;
 } GIF;
 ```  
-We transform its frames to bmp by different disposal method in gif, usually repainted a range or reserved a range. It depends on `graphics.GIF_GRAPHICS_EXT_DATA.flag_disposal_method`.   
+
+We transform its frames to bmp by different disposal method in gif, usually repainted a range or reserved a range. It depends on `graphics.GIF_GRAPHICS_EXT_DATA.flag_disposal_method`.  
 When we load gif file, we record order of extension and image data in `ComponentOrder` (all of them have their mark), and when we get file from gif structure, we load data via `ComponentOrder`.  
   
-### A Bug  
+### A Bug (already fixed)  
+
 When program parses No.5 gif picture ([`5ooqq.gif`](./assets/5ooqq.gif)), it always couldn't free data buffer in main function (`frame_buffer`). Maybe there memory is out of bound, and I have no energy to solve it at present.  
+
 ### Reference  
+
 [GIF Wiki](https://en.wikipedia.org/wiki/GIF)  **Extremely Recommend!!**
 [GIF Animation](http://giflib.sourceforge.net/whatsinagif/animation_and_transparency.html)  **Extremely Recommend!!**  
 [GIF Overview1 - English reference "What is GIF"](http://giflib.sourceforge.net/whatsinagif/bits_and_bytes.html)  **Extremely Recommend!!**  
@@ -55,15 +65,16 @@ When program parses No.5 gif picture ([`5ooqq.gif`](./assets/5ooqq.gif)), it alw
 [BMP Overview](https://www.cnblogs.com/l2rf/p/5643352.html)  
 
 ### GIF Essentials  
+
 Extension block start with `0x21`(ASCLL: `!`) and `Extension Label` follows it.  
 `0xFF` is Application Extension.  
-`0xF9` is Graphics Control Extension.   
+`0xF9` is Graphics Control Extension.  
 `0xFE` is Comment Extension.  
 `0x01` is Plain Text Extension.  
 All extension block terminator is `0x00`.  
 
-The `Image Descriptor` start with `0x2C`(ASCLL: `,`)  `Local Color Table` and `Image Data` follow it.   
-`Image Data` terminator is also `0x00`, and there are data block (`block size` \+ `data byte`) processed by LZW algorithm maybe repeat many times.   
+The `Image Descriptor` start with `0x2C`(ASCLL: `,`)  `Local Color Table` and `Image Data` follow it.  
+`Image Data` terminator is also `0x00`, and there are data block (`block size` \+ `data byte`) processed by LZW algorithm maybe repeat many times.  
 
 GIF file always terminated by a byte with a value of `0x3B`(ASCLL: `;`).  
 
@@ -72,6 +83,7 @@ Color index amount (Size of Color Table) must be power of 2, assume we use `M` c
 GIF uses index anf color table set each pixel color, color table max amount is $2^{7+1}=256$ because there are 3 bits set size of color table, and there are 3 bits set color resolution(or called it color depth), so GIF color has R(0~255) G(0~255) B(0~255), but it has colors max 256 because of size of color table.  
   
 ### BMP Essentials  
+
 BMP have file image header and color data, the image header consist of bmp file header[14Bytes] and bmp information header[40Bytes]. You can see at [bmp.h](./bmp.h).  
 
 BMP storage color data order is **BGR**, not RGB, this is important. The file size calculated follow (Byte):  
@@ -79,11 +91,16 @@ $Size = (PixelWidth * PixelHeight * BitPerPixel) / 8$
 For gif to bmp, BitPerPixel always is 24.  
   
 ### test.gif  
+
 it created by pragma `gif_creator`, and it will be parsed in pragma `gif_parser`  
 ![automatically generated images](test.gif)  
 
-### Mainly Resource  
-![dragon_cat_gif](lm.gif)   
+### Mainly testing gif resources  
+
+<details>
+<summary>gif resources</summary>
+
+![dragon_cat_gif](lm.gif)  
 ![kof](assets/1kof.gif)  
 ![catcut](assets/2catcut.gif)  
 ![catboom](assets/3catboom.gif)  
@@ -97,3 +114,164 @@ it created by pragma `gif_creator`, and it will be parsed in pragma `gif_parser`
 ![plane](assets/11plane.gif)  
 ![eat](assets/12eat.gif)  
 ![logo](assets/13logo.gif)  
+
+</details>
+
+### Optimization  
+
+The current program flow is shown in the figure below (if we used in UEFI).  
+
+```mermaid
+flowchart TD
+    A["GIF picture"] --> B["GIF Parser"]
+    
+    B --> C["Decoding GIF Header"]
+    B --> D["Decoding Image Descriptor"]
+    B --> E["Decoding Color Table"]
+    B --> F["Decoding Extension"]
+
+    D --> G["LZW Decode"]
+    G --> H["Color Index Buffer"]
+
+    H --> I["Pixel-by-pixel processing"]
+    C --> I
+    E --> I
+    F --> I
+
+    I --> J["Generate whole IMG_FRAME"]
+    J --> K["RGB/BGR Buffer"]
+
+    K --> L["Generate BMP"]
+    L --> M["BMP File/Buffer"]
+
+    M --> N["UEFI BMP Decoder"]
+    N --> O["GOP->Blt"]
+    O --> P["Monitor"]
+```
+
+Among them, the following process consumed too much time.  
+
+```text
+GIF
+ ↓
+LZW
+ ↓
+Color Index
+ ↓
+Pixel-by-pixel building whole Canvas
+ ↓
+RGB
+ ↓
+BMP
+ ↓
+Decoding BMP again
+ ↓
+GOP
+```
+
+It does too much repetitive work.  
+
+Now we optimize the process as follows.  
+
+```mermaid
+flowchart TD
+    A["GIF picture"] --> B["GIF Parser"]
+
+    B --> C["GIF metadata"]
+    B --> D["Image Descriptor"]
+    B --> E["Color Table"]
+    B --> F["Graphic Control Extension"]
+
+    D --> G["LZW Decoder"]
+
+    G --> H["Current Frame Color Index"]
+
+    C --> I["Canvas Buffer"]
+    H --> J["Frame Composer"]
+    D --> J
+    E --> J
+    F --> J
+    I --> J
+
+    J --> I
+
+    I --> K["GOP Renderer"]
+
+    K --> L["EfiBltBufferToVideo"]
+    L --> M["Monitor"]
+```
+
+The key to the new processing flow is that it no longer "generates a complete BMP for each frame", but instead maintains a long-lived Canvas.  
+
+The real Frame Composer is:  
+
+```text
+GifParser
+    │
+    ↓
+GifFrame
+    │
+    ├── Left
+    ├── Top
+    ├── Width
+    ├── Height
+    ├── ColorIndex[]
+    ├── TransparentIndex
+    └── DisposalMethod
+             │
+             ↓
+       FrameComposer
+             │
+             ↓
+        CanvasBuffer
+```
+
+### Player  
+
+Use SDL3 devel 3.4.16 mingw renderer(for test optimization).  
+
+```bash
+make player
+.\player.exe .\assets\xxx.gif
+```
+
+```text
+                         GIF File
+                            │
+                            ▼
+                    ┌──────────────┐
+                    │  GIF Parser  │
+                    └──────┬───────┘
+                           │
+                    GIF Frame Info
+                           │
+                           ▼
+                    ┌──────────────┐
+                    │ LZW Decoder  │
+                    └──────┬───────┘
+                           │
+                    Color Index[]
+                           │
+                           ▼
+                  ┌─────────────────┐
+                  │ Frame Composer  │
+                  │                 │
+                  │ Palette         │
+                  │ Transparency    │
+                  │ Disposal        │
+                  └────────┬────────┘
+                           │
+                           ▼
+                    ┌──────────────┐
+                    │    Canvas    │
+                    │  RGBA/BGRA   │
+                    └──────┬───────┘
+                           │
+                           ▼
+                    ┌──────────────┐
+                    │ SDL3 Renderer│
+                    └──────┬───────┘
+                           │
+                           ▼
+                        Window
+```
