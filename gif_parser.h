@@ -8,10 +8,12 @@
 typedef GIF_COLOR_TABLE IMG_FRAME;
 typedef struct
 {
-    UINTN w, h;
+    UINTN w;
+    UINTN h;
     UINTN count;
     IMG_FRAME **frames;
-    UINT32 delays;
+    // each frame display time(ms)  frame[0]->delay[0]
+    UINT32 *delays;
 } IMG_ANIMATION;
 
 BOOL GIFParserGetGifDataFromFile(IN const CHAR *filename, OUT GIF **gif, OUT UINTN *buffer_size);

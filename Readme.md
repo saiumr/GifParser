@@ -275,3 +275,39 @@ make player
                            ▼
                         Window
 ```
+
+Basic processing(the delay for each frame may be different in a GIF, so we need to compute their differences):  
+
+```text
+player.exe xxx.gif
+        │
+        ▼
+GIFParserGetAnimationFromFile()
+        │
+        ▼
+ IMG_ANIMATION
+ ┌───────────────────────────┐
+ │ width                     │
+ │ height                    │
+ │ count                     │
+ │ frames[0]                 │
+ │ frames[1]                 │
+ │ frames[2]                 │
+ │ ...                       │
+ │ delays[0]                 │
+ │ delays[1]                 │
+ │ delays[2]                 │
+ └───────────────────────────┘
+        │
+        ▼
+     GifPlayer
+        │
+        ▼
+    SDLRenderer
+        │
+        ▼
+      SDL3
+        │
+        ▼
+      Window
+```

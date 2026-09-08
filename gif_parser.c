@@ -134,11 +134,19 @@ BOOL GIFParserGetAnimationFromGif(IN GIF *gif, OUT IMG_ANIMATION **animation)
 
     (*animation)->w = gif->LogicalScreenDescriptor.canvas_width; // true area
     (*animation)->h = gif->LogicalScreenDescriptor.canvas_height;
-    (*animation)->delays = gif->GraphicsExtHeader->next->graphics.delay_time * 10; // ms
+    
     (*animation)->count = gif->FramesCount;
     (*animation)->frames = (IMG_FRAME **)malloc(sizeof(IMG_FRAME *) * (*animation)->count);
     if ((*animation)->frames == NULL)
     {
+        return FALSE;
+    }
+    (*animation)->delays = (UINT32 *)malloc(sizeof(UINT32) * (*animation)->count);
+    if ((*animation)->delays == NULL)
+    {
+        free((*animation)->frames);
+        free(*animation);
+        *animation = NULL;
         return FALSE;
     }
 
@@ -405,6 +413,7 @@ BOOL GIFParserGetAnimationFromGif(IN GIF *gif, OUT IMG_ANIMATION **animation)
             frame = frame_raw;
         }
 
+        (*animation)->delays[frame_count] = graphics->graphics.delay_time * 10;
         (*animation)->frames[frame_count] = frame;
         frame = NULL;
         ++frame_count;
@@ -434,6 +443,8 @@ BOOL GIFParserClearAnimation(IN IMG_ANIMATION *animation)
         }
         if (animation->frames)
             free(animation->frames);
+        if (animation->delays)
+            free(animation->delays);
         free(animation);
     }
     return TRUE;
