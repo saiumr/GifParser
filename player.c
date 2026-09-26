@@ -12,7 +12,9 @@ typedef struct
     SDL_Texture  *texture;
     int width;
     int height;
-    uint32_t *pixels;
+    /* uploaded-pixel accounting, so the dirty-rectangle saving is observable */
+    unsigned long long dirty_pixels;
+    unsigned long long full_pixels;
 } SDL_PLAYER;
 
 static bool SDLPlayerInit(SDL_PLAYER *player, int width, int height)
@@ -82,19 +84,8 @@ static bool SDLPlayerInit(SDL_PLAYER *player, int width, int height)
 
     player->width = width;
     player->height = height;
-
-    player->pixels = (uint32_t *)malloc((size_t)width * (size_t)height * sizeof(uint32_t));
-    if (player->pixels == NULL)
-    {
-        fprintf(stderr, "Allocate framebuffer failed\n");
-
-        SDL_DestroyTexture(player->texture);
-        SDL_DestroyRenderer(player->renderer);
-        SDL_DestroyWindow(player->window);
-        SDL_Quit();
-
-        return false;
-    }
+    player->dirty_pixels = 0;
+    player->full_pixels = 0;
 
     return true;
 }
@@ -119,48 +110,63 @@ static void SDLPlayerDestroy(SDL_PLAYER *player)
         player->window = NULL;
     }
 
-    if (player->pixels != NULL) {
-        free(player->pixels);
-        player->pixels = NULL;
-    }
-
     SDL_Quit();
 }
 
-static void ConvertFrameToRGBA(const IMG_FRAME *frame, uint32_t *pixels, size_t pixel_count)
+/* Convert one rectangle of the canvas straight into the locked texture.
+ *
+ * This is the whole point of the dirty-rectangle path: the loop touches only the
+ * pixels that can have changed - no full-canvas conversion pass, no full-canvas
+ * upload, and no full-canvas staging buffer (the W*H*4 `pixels` array this player
+ * used to keep is gone entirely). Reading `canvas->rgb` directly is deliberate:
+ * going through GIFCanvasOutputRect first would add a second pass over the same
+ * pixels for no benefit. */
+static void ConvertCanvasRectToRGBA(const GIF_CANVAS *canvas, const GIF_RECT *rect,
+                                    uint32_t *dst, size_t dst_pitch)
 {
-    for (size_t i = 0; i < pixel_count; ++i)
+    const IMG_FRAME *src = canvas->rgb + rect->top * canvas->width + rect->left;
+    for (UINTN row = 0; row < rect->height; ++row)
     {
-        pixels[i] =
-            ((uint32_t)frame[i].r << 24) |
-            ((uint32_t)frame[i].g << 16) |
-            ((uint32_t)frame[i].b << 8)  |
-            0xFF;
+        uint32_t *out = dst + row * dst_pitch;
+        const IMG_FRAME *in = src + (size_t)row * canvas->width;
+        for (UINTN col = 0; col < rect->width; ++col)
+        {
+            out[col] =
+                ((uint32_t)in[col].r << 24) |
+                ((uint32_t)in[col].g << 16) |
+                ((uint32_t)in[col].b << 8)  |
+                0xFF;
+        }
     }
 }
 
-static bool SDLPlayerPresentFrame(SDL_PLAYER *player, const IMG_FRAME *frame)
+static bool SDLPlayerUploadDirty(SDL_PLAYER *player, const GIF_CANVAS *canvas,
+                                 const GIF_RECT *rect)
 {
-    size_t pixel_count = (size_t)player->width * (size_t)player->height;
+    SDL_Rect region;
+    region.x = (int)rect->left;
+    region.y = (int)rect->top;
+    region.w = (int)rect->width;
+    region.h = (int)rect->height;
 
-    ConvertFrameToRGBA(
-        frame,
-        player->pixels,
-        pixel_count);
-
-    if (!SDL_UpdateTexture(
-            player->texture,
-            NULL,
-            player->pixels,
-            player->width * sizeof(uint32_t)))
+    void *dst = NULL;
+    int pitch = 0;
+    if (!SDL_LockTexture(player->texture, &region, &dst, &pitch))
     {
-        fprintf(stderr,
-                "SDL_UpdateTexture failed: %s\n",
-                SDL_GetError());
-
+        fprintf(stderr, "SDL_LockTexture failed: %s\n", SDL_GetError());
         return false;
     }
 
+    ConvertCanvasRectToRGBA(canvas, rect, (uint32_t *)dst, (size_t)pitch / sizeof(uint32_t));
+
+    SDL_UnlockTexture(player->texture);
+
+    player->dirty_pixels += (unsigned long long)rect->width * rect->height;
+    return true;
+}
+
+static bool SDLPlayerPresentTexture(SDL_PLAYER *player)
+{
     if (!SDL_RenderClear(player->renderer))
     {
         return false;
@@ -195,13 +201,24 @@ int main(int argc, char **argv)
     }
 
     printf("GIF: %ux%u, frames=%u\n",
-        (unsigned)animation->w,
-        (unsigned)animation->h,
+        (unsigned)animation->width,
+        (unsigned)animation->height,
         (unsigned)animation->count);
 
     SDL_PLAYER player = {0};
-    if (!SDLPlayerInit(&player, (int)animation->w, (int)animation->h))
+    if (!SDLPlayerInit(&player, (int)animation->width, (int)animation->height))
     {
+        GIFParserClearAnimation(animation);
+        return 1;
+    }
+
+    // One canvas, and no full-canvas frame buffer: the picture is uploaded
+    // straight out of the canvas, one dirty rectangle at a time.
+    GIF_CANVAS canvas;
+    if (!GIFCanvasCreate(&canvas, animation))
+    {
+        fprintf(stderr, "Failed to create the compositing canvas\n");
+        SDLPlayerDestroy(&player);
         GIFParserClearAnimation(animation);
         return 1;
     }
@@ -209,6 +226,7 @@ int main(int argc, char **argv)
     bool running = true;
     while (running)
     {
+        GIFCanvasReset(&canvas, animation);
         for (UINTN i = 0; i < animation->count; ++i)
         {
             SDL_Event event;
@@ -227,13 +245,35 @@ int main(int argc, char **argv)
                 break;
             }
 
-            if (!SDLPlayerPresentFrame(&player, animation->frames[i]))
+            if (!GIFCanvasCompose(&canvas, animation, i))
+            {
+                fprintf(stderr, "Failed to composite frame %u\n", (unsigned)i);
+                running = false;
+                break;
+            }
+
+            /* Upload before the disposal runs: disposal describes the canvas the
+               *next* frame starts from, and the screen has to show this frame as
+               composited. */
+            GIF_RECT dirty;
+            player.full_pixels += (unsigned long long)animation->width * animation->height;
+            if (GIFCanvasDirtyRect(animation, i, &dirty))
+            {
+                if (!SDLPlayerUploadDirty(&player, &canvas, &dirty))
+                {
+                    running = false;
+                    break;
+                }
+            }
+            GIFCanvasApplyDisposal(&canvas, animation, i);
+
+            if (!SDLPlayerPresentTexture(&player))
             {
                 running = false;
                 break;
             }
 
-            UINT32 delay = animation->delays[i];
+            UINT32 delay = animation->frames[i].delay_ms;
             if (delay < 10)
             {
                 delay = 10;
@@ -243,6 +283,14 @@ int main(int argc, char **argv)
         }
     }
 
+    if (player.full_pixels > 0)
+    {
+        printf("uploaded %llu of %llu pixels (%.1f%% of the full-canvas cost)\n",
+               player.dirty_pixels, player.full_pixels,
+               100.0 * (double)player.dirty_pixels / (double)player.full_pixels);
+    }
+
+    GIFCanvasDestroy(&canvas);
     SDLPlayerDestroy(&player);
     GIFParserClearAnimation(animation);
     return 0;

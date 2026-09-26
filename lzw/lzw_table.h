@@ -59,6 +59,12 @@ int lzw_table_lookup_code(struct lzw_table *t,
 void lzw_table_str(struct lzw_table *t,
                    unsigned int code,
                    struct darray **out_buf);
+/* same expansion as lzw_table_str but writes into a caller-owned buffer and
+   returns the number of bytes produced (in reverse order) */
+unsigned long lzw_table_expand(struct lzw_table *t,
+                               unsigned int code,
+                               unsigned char *dst,
+                               unsigned long cap);
 unsigned char lzw_entry_head(struct lzw_table *t, struct lzw_entry *e);
 
 #endif

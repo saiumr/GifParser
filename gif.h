@@ -197,6 +197,11 @@ typedef struct GIF
     GIF_COMPONENT_DATA ComponentOrder;
     UINTN FramesCount;
     CHAR trailer; // value = 0x3B  ';'
+    /* Some encoders append data after the trailer (16dapipi.gif carries 16
+       bytes). They are not part of the format, but keeping them makes a
+       parse -> rebuild round trip byte-exact. NULL when there are none. */
+    CHAR *trailer_tail;
+    UINTN trailer_tail_size;
 } GIF;
 
 #pragma pack(pop)

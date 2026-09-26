@@ -9,12 +9,13 @@ typedef uint8_t byte;
 
 int main(int argc, const char **argv)
 {
-    FILE *fp = NULL;
-
-    fp = fopen("test.gif", "wb");
+    (void)argc;
+    (void)argv;
+    FILE *fp = fopen("test.gif", "wb");
     if (fp == NULL)
     {
-        printf("fp is NULL.\n");
+        printf("cannot create test.gif\n");
+        return 1;
     }
 
     // GIF Header
@@ -24,6 +25,9 @@ int main(int argc, const char **argv)
     // Screen Logical Label
     uint16_t gif_width = 100;
     uint16_t gif_height = 100;
+    // the frame really holds gif_width * gif_height pixels: the image descriptor
+    // below declares exactly this rectangle, so the compressed data must match it
+    unsigned long gif_pixel_count = (unsigned long)gif_width * (unsigned long)gif_height;
     // 0xF2 = 1   1 1 1   0   0 1 0
     uint8_t gif_logical_screen_pack_byte = 0xF2; // low 3 bits is size of global table N. need 2^(N+1) colors.
     uint8_t gif_bg_color_index = 0;
@@ -78,33 +82,33 @@ int main(int argc, const char **argv)
         fwrite(gif_image_descriptor, 10, 1, fp);
 
         // one frame data color by index
-        uint8_t *gif_one_frame_raw = malloc(700 * 700);
-        memset(gif_one_frame_raw, i, 700 * 700); // set 0 for 700*700 data
+        uint8_t *gif_one_frame_raw = malloc(gif_pixel_count);
+        memset(gif_one_frame_raw, i, gif_pixel_count); // fill the whole declared rectangle with index i
         printf("current frame color index: %d\n", gif_one_frame_raw[0]);
         unsigned long compressed_size = 0;
         byte *img = NULL;
 
         // ======== storage raw_before_compress for comparing =============== //
         FILE *raw = fopen("raw_before_compress.raw", "ab");
-        fwrite(gif_one_frame_raw, 700 * 700, 1, raw);
+        fwrite(gif_one_frame_raw, gif_pixel_count, 1, raw);
         fflush(raw);
         fclose(raw);
 
-        lzw_compress_gif(3, 700 * 700, gif_one_frame_raw, &compressed_size, &img); // 3 is LZW Minimum Code Size (see Docs "What is GIF")
-        printf("compress_len = %u\n", compressed_size);
+        lzw_compress_gif(3, gif_pixel_count, gif_one_frame_raw, &compressed_size, &img); // 3 is LZW Minimum Code Size (see Docs "What is GIF")
+        printf("compress_len = %lu\n", compressed_size);
 
-        uint8_t *gif_raw = malloc(700 * 700);
+        uint8_t *gif_raw = malloc(gif_pixel_count);
         unsigned long raw_len = 0;
-        lzw_decompress(3, 700 * 700, img, &raw_len, &gif_raw);
-        printf("raw_len = %d\n", raw_len);
+        lzw_decompress(3, compressed_size, img, gif_pixel_count, &raw_len, &gif_raw); // decompress the real payload, not the raw size
+        printf("raw_len = %lu\n", raw_len);
         FILE *gif_res = fopen("gif_raw_res.raw", "ab");
-        fwrite(gif_raw, 700 * 700, 1, gif_res);
+        fwrite(gif_raw, raw_len, 1, gif_res);
         fflush(gif_res);
         fclose(gif_res);
 
-        printf("size img = %u, compress_size = %u", sizeof(img), compressed_size);
+        printf("size img = %zu, compress_size = %lu", sizeof(img), compressed_size);
 
-        printf("current frame compression size: %ld\n", compressed_size);
+        printf("current frame compression size: %lu\n", compressed_size);
         fputc(0x03, fp); // 3 is LZW Minimum Code Size (see Docs "What is GIF")
         unsigned long current_index = 0;
         int count = 0;

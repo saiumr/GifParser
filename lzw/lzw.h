@@ -32,6 +32,7 @@ void lzw_compress_gif(unsigned char bit_size,
 void lzw_decompress(unsigned char bit_size,
                     unsigned long size,
                     unsigned char *src,
+                    unsigned long expected_size,
                     unsigned long *out_len,
                     unsigned char **output);
 

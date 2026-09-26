@@ -1,0 +1,20 @@
+Now function: GIFParserGetAnimationFromFile
+Now Function: GIFParserGetGifDataFromFile
+GIFParserGetGifDataFromFile: trailer at offset 61 of 62.
+Now function: GIFParserGetAnimationFromGif
+true width/height: 4, 4
+frame count: [0]
+w = 2, h = 2, left = 0, top = 0
+changed_data_index: 3, changed_data_size: 4, out_changed_data_size: 4
+Now function: GIFParserClear
+canvas 4x4   frames 1
+frame0 rect=(0,0) size=2x2 disposal=2 transp=0
+frame pixels (indices, file order): 1 0 0 1
+frame LCT: [0]=0,0,255 [1]=0,255,0 [2]=255,255,0 [3]=0,0,0
+GCT bg[0] = 255,0,0
+displayed frame (r,g,b):
+  (  0,255,  0) (  0,  0,255) (255,  0,  0) (255,  0,  0) 
+  (  0,  0,255) (  0,255,  0) (255,  0,  0) (255,  0,  0) 
+  (255,  0,  0) (255,  0,  0) (255,  0,  0) (255,  0,  0) 
+  (255,  0,  0) (255,  0,  0) (255,  0,  0) (255,  0,  0) 
+Now function: GIFParserClearAnimation

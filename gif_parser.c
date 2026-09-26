@@ -2,20 +2,92 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stddef.h>
 #include <lzw/lzw.h>
 #include "gif_parser.h"
 
+// the component order list grows in blocks of this many entries; element size is
+// applied at the allocation site (the old macro already multiplied by the element
+// size and was then multiplied again, wasting ~1MB per parse)
 #define ALLOC_COMPONENT_AMOUNT 512
-#define ALLOC_COMPONENT_SIZE ALLOC_COMPONENT_AMOUNT * sizeof(GIF_COMPONENT)
 UINT16 gAllocComponentCount = 1;
 
 UINTN _GetFileSizeByByte(IN FILE *fp);
 
-// read memory and move file pointer
-BOOL _GIFParserMemRead(OUT VOID *dst, IN VOID **src, IN UINT32 size);
+/* ---------------------------------------------------------------------------
+ * Bounds-checked read cursor.
+ *
+ * The parser used to walk a bare `CHAR *` through the file buffer with no idea
+ * how many bytes were left, so a truncated or hostile file simply read past the
+ * allocation (a 6-byte file was enough to trip the stack protector). Every read
+ * now goes through this cursor, which records a hard error instead of running
+ * off the end.
+ *
+ * `pos` deliberately has no "valid" sentinel: `bad` carries that, so that a
+ * cursor sitting exactly at end-of-buffer is still representable.
+ * ------------------------------------------------------------------------- */
+typedef struct
+{
+    const UINT8 *data;
+    UINTN size;
+    UINTN pos;
+    BOOL bad; // set when a read went past the end
+} _GIF_READER;
 
-BOOL _HandleExtension(IN CHAR **src, IN CHAR label, OUT GIF **gif);
-BOOL _HandleImageData(IN CHAR **src, OUT GIF **gif);
+static void _GIFReaderInit(IN OUT _GIF_READER *r, IN const void *data, IN UINTN size)
+{
+    r->data = (const UINT8 *)data;
+    r->size = size;
+    r->pos = 0;
+    r->bad = FALSE;
+}
+
+static BOOL _GIFReaderHas(IN const _GIF_READER *r, IN UINTN n)
+{
+    return (!r->bad) && (r->size - r->pos >= n);
+}
+
+// read one byte, or -1 if the file ended
+static int _GIFReaderByte(IN OUT _GIF_READER *r)
+{
+    if (!_GIFReaderHas(r, 1))
+    {
+        r->bad = TRUE;
+        return -1;
+    }
+    return r->data[r->pos++];
+}
+
+// copy n bytes out of the cursor
+static BOOL _GIFReaderCopy(IN OUT _GIF_READER *r, OUT void *dst, IN UINTN n)
+{
+    if (!_GIFReaderHas(r, n))
+    {
+        r->bad = TRUE;
+        return FALSE;
+    }
+    memcpy(dst, r->data + r->pos, n);
+    r->pos += n;
+    return TRUE;
+}
+
+// advance without copying
+static BOOL _GIFReaderSkip(IN OUT _GIF_READER *r, IN UINTN n)
+{
+    if (!_GIFReaderHas(r, n))
+    {
+        r->bad = TRUE;
+        return FALSE;
+    }
+    r->pos += n;
+    return TRUE;
+}
+
+BOOL _HandleExtension(IN OUT _GIF_READER *r, IN CHAR label, OUT GIF **gif);
+BOOL _HandleImageData(IN OUT _GIF_READER *r, OUT GIF **gif);
+
+// consume a data sub-block chain: [size][data...]...[0x00]
+BOOL _SkipDataSubBlocks(IN OUT _GIF_READER *r);
 
 VOID _RecordComponentOrder(IN GIF_COMPONENT key, OUT GIF **gif);
 
@@ -31,77 +103,6 @@ typedef struct
 
 _GIF_TAILER_POINTER gTailerPointer;
 
-UINT8 *GIFParserAnimationFramesTransformBMP(IN IMG_ANIMATION *animation, IN UINTN frame_index, OUT UINTN *frame_size)
-{
-    printf("Now function: GIFParserGetAnimationFrames [frame_index = %u]\n", frame_index);
-    if (frame_index >= animation->count)
-    {
-        return NULL;
-    }
-
-    // one frame buffer
-    UINTN line_data = animation->w * sizeof(IMG_FRAME);
-    if (line_data % 4 != 0)
-    {
-        line_data = (line_data / 4 + 1) * 4;
-    }
-    UINTN line_diff = line_data - animation->w * 3;
-
-    UINTN buffer_color_amount = line_data * animation->h; // 1 * extension width data * h (colors)
-    *frame_size = 54 + buffer_color_amount;
-    UINT8 *buffer = (UINT8 *)malloc(*frame_size);
-    printf("bmp file size: %u\n", *frame_size);
-    if (buffer == NULL)
-    {
-        return NULL;
-    }
-    BMP_IMAGE_HEADER bmp_header;
-    bmp_header.CharB = 'B';
-    bmp_header.CharM = 'M';
-    bmp_header.Size = *frame_size; // bit_size/8 -> Byte size
-    bmp_header.Reserved[0] = 0;
-    bmp_header.Reserved[1] = 0;
-    bmp_header.ImageOffset = 0x36;
-    bmp_header.InfoHeaderSize = 0x28; // 40 Bytes
-    bmp_header.PixelWidth = animation->w;
-    bmp_header.PixelHeight = animation->h;
-    bmp_header.Planes = 1;
-    bmp_header.BitPerPixel = 0x18; // 24 bits per pixel
-    bmp_header.CompressionType = 0;
-    bmp_header.ImageSize = bmp_header.Size - bmp_header.ImageOffset;
-    bmp_header.XPixelsPerMeter = 0x1625;
-    bmp_header.YPixelsPerMeter = 0x1625;
-    bmp_header.NumberOfColors = 0;
-    bmp_header.ImportantColors = 0;
-
-    // header
-    memcpy(buffer, &bmp_header, 54);
-    // image data
-    UINTN index = 54;
-    for (UINTN row = animation->h - 1; row >= 0; --row)
-    {
-        for (UINTN col = 0; col < animation->w; ++col)
-        {
-            buffer[index++] = animation->frames[frame_index][animation->w * row + col].b;
-            buffer[index++] = animation->frames[frame_index][animation->w * row + col].g;
-            buffer[index++] = animation->frames[frame_index][animation->w * row + col].r;
-        }
-        if (line_diff != 0)
-        {
-            for (UINTN diff = 0; diff < line_diff; ++diff)
-            {
-                buffer[index++] = 0;
-            }
-        }
-        // row is unsigned value
-        if (row == 0)
-        {
-            break;
-        }
-    }
-
-    return buffer;
-}
 
 BOOL GIFParserGetAnimationFromFile(IN const CHAR *filename, OUT IMG_ANIMATION **animation)
 {
@@ -115,6 +116,10 @@ BOOL GIFParserGetAnimationFromFile(IN const CHAR *filename, OUT IMG_ANIMATION **
 
     if (!GIFParserGetAnimationFromGif(gif, animation))
     {
+        // the parsed GIF structure is fully owned here: without this the whole
+        // file structure (color tables, sub-blocks, frame list) leaked whenever
+        // the file decoded but could not be turned into an animation
+        GIFParserClear(gif);
         return FALSE;
     }
 
@@ -123,364 +128,279 @@ BOOL GIFParserGetAnimationFromFile(IN const CHAR *filename, OUT IMG_ANIMATION **
     return TRUE;
 }
 
+// index the canvas starts from and that a short frame is padded with: the
+// Logical Screen Descriptor background index when a global table exists
+static UINT8 _AnimationBackgroundIndex(IN const IMG_ANIMATION *animation)
+{
+    return (animation->global_palette != NULL) ? animation->background_index : 0;
+}
+
 BOOL GIFParserGetAnimationFromGif(IN GIF *gif, OUT IMG_ANIMATION **animation)
 {
     printf("Now function: GIFParserGetAnimationFromGif\n");
-    *animation = (IMG_ANIMATION *)malloc(sizeof(IMG_ANIMATION));
-    if ((*animation) == NULL)
+    if (gif == NULL || animation == NULL)
+    {
+        return FALSE;
+    }
+    *animation = NULL;
+
+    if (gif->FramesCount == 0)
+    {
+        printf("GIFParserGetAnimationFromGif: no frames in file.\n");
+        return FALSE;
+    }
+
+    IMG_ANIMATION *result = (IMG_ANIMATION *)calloc(1, sizeof(IMG_ANIMATION));
+    if (result == NULL)
     {
         return FALSE;
     }
 
-    (*animation)->w = gif->LogicalScreenDescriptor.canvas_width; // true area
-    (*animation)->h = gif->LogicalScreenDescriptor.canvas_height;
-    
-    (*animation)->count = gif->FramesCount;
-    (*animation)->frames = (IMG_FRAME **)malloc(sizeof(IMG_FRAME *) * (*animation)->count);
-    if ((*animation)->frames == NULL)
+    result->width = gif->LogicalScreenDescriptor.canvas_width;
+    result->height = gif->LogicalScreenDescriptor.canvas_height;
+    result->count = gif->FramesCount;
+    result->background_index = gif->LogicalScreenDescriptor.bg_color_index;
+
+    if (gif->LogicalScreenDescriptor.flag_color_table == 1 && gif->GlobalColorTable != NULL)
     {
-        return FALSE;
-    }
-    (*animation)->delays = (UINT32 *)malloc(sizeof(UINT32) * (*animation)->count);
-    if ((*animation)->delays == NULL)
-    {
-        free((*animation)->frames);
-        free(*animation);
-        *animation = NULL;
-        return FALSE;
+        /* deep-copy the global table: the caller frees the parsed GIF before
+           using the animation, and frames render through this palette */
+        UINTN entries = (UINTN)1 << (gif->LogicalScreenDescriptor.flag_table_size + 1);
+        result->global_palette = (GIF_COLOR_TABLE *)malloc(sizeof(GIF_COLOR_TABLE) * entries);
+        if (result->global_palette == NULL)
+        {
+            free(result);
+            return FALSE;
+        }
+        memcpy(result->global_palette, gif->GlobalColorTable, sizeof(GIF_COLOR_TABLE) * entries);
+        result->global_palette_entries = entries;
     }
 
-    printf("true width/height: %u, %u\n", (*animation)->w, (*animation)->h);
-
-    typedef enum COLOR_KIND
+    if (result->width == 0 || result->height == 0)
     {
-        LOCAL_COLOR,
-        GLOBAL_COLOR
-    } COLOR_KIND;
-    UINTN pixel_count = (*animation)->w * (*animation)->h;
-    UINT8 *color_index_list = (UINT8 *)malloc(sizeof(UINT8) * pixel_count);
-    COLOR_KIND *color_index_kind = (COLOR_KIND *)malloc(sizeof(COLOR_KIND) * pixel_count);
-    if (color_index_list == NULL)
-    {
+        printf("GIFParserGetAnimationFromGif: degenerate canvas %lux%lu.\n",
+               result->width, result->height);
+        free(result);
         return FALSE;
     }
 
-    UINTN frame_count = 0;
-    GIF_IMAGE_DATA *prev_image = gif->ImageDataHeader;
-    GIF_IMAGE_DATA *image = prev_image->next;
+    result->frames = (GIF_FRAME_INFO *)calloc(result->count, sizeof(GIF_FRAME_INFO));
+    if (result->frames == NULL)
+    {
+        free(result);
+        return FALSE;
+    }
+
+    printf("true width/height: %lu, %lu\n", result->width, result->height);
+
+    /* A Graphic Control Extension is optional: an image block with no preceding
+       GCE implies disposal 0, no transparency and no delay. Keep a zeroed default
+       so the fields can be read unconditionally. */
+    GIF_GRAPHICS_EXT_DATA default_graphics;
+    memset(&default_graphics, 0, sizeof(default_graphics));
+
+    GIF_IMAGE_DATA *image = gif->ImageDataHeader->next;
     GIF_GRAPHICS_EXT_DATA *graphics = gif->GraphicsExtHeader->next;
-    GIF_COLOR_TABLE transparency_color = {0, 0, 0};
-    GIF_COLOR_TABLE bg_color = {255, 255, 255};
 
-    if (gif->LogicalScreenDescriptor.flag_color_table == 1)
+    for (UINTN frame_count = 0; frame_count < result->count; ++frame_count)
     {
-        bg_color.r = gif->GlobalColorTable[gif->LogicalScreenDescriptor.bg_color_index].r;
-        bg_color.g = gif->GlobalColorTable[gif->LogicalScreenDescriptor.bg_color_index].g;
-        bg_color.b = gif->GlobalColorTable[gif->LogicalScreenDescriptor.bg_color_index].b;
-    }
-
-    while (image != NULL)
-    {
-        UINTN changed_data_size = image->image_descriptor.width * image->image_descriptor.height; // exclude non-changed parts
-        UINT8 *changed_color_index_list = (UINT8 *)malloc(changed_data_size);
-        UINT8 *changed_data = (UINT8 *)malloc(sizeof(UINT8) * image->one_frame_data.data_sub_block_buffer.total_data_size);
-        if (changed_data == NULL)
+        if (image == NULL)
         {
+            printf("GIFParserGetAnimationFromGif: image list ended early at frame %lu.\n", frame_count);
+            GIFParserClearAnimation(result);
             return FALSE;
         }
 
-        GIF_DATA_SUB_BLOCK_NODE *p = image->one_frame_data.data_sub_block_buffer.header->next;
-        UINTN changed_data_index = 0;
-        while (p != NULL)
-        {
-            memcpy(changed_data + changed_data_index, p->data, p->data_size);
-            changed_data_index += p->data_size;
-            p = p->next;
-        }
+        GIF_GRAPHICS_CONTROL_EXTENSION *gce = (graphics != NULL) ? &graphics->graphics
+                                                                : &default_graphics.graphics;
+        GIF_FRAME_INFO *out = &result->frames[frame_count];
 
-        UINT8 bit_size = image->one_frame_data.LZW_Minimum_Code;
-        UINTN out_changed_data_size = 0;
-        lzw_decompress(bit_size, changed_data_size, changed_data, &out_changed_data_size, &changed_color_index_list);
-        printf("changed_data_index: %u, changed_data_size: %u, out_changed_data_size: %u\n", changed_data_index, changed_data_size, out_changed_data_size);
-
-        // restore color
-        IMG_FRAME *frame = (IMG_FRAME *)malloc(sizeof(IMG_FRAME) * pixel_count);
-        if (frame == NULL)
+        out->left = image->image_descriptor.left;
+        out->top = image->image_descriptor.top;
+        out->width = image->image_descriptor.width;
+        out->height = image->image_descriptor.height;
+        out->interlaced = (image->image_descriptor.flag_interlace == 1);
+        out->has_transparency = (gce->flag_transparency_used == 1);
+        out->transparent_index = gce->transparent_color_index;
+        out->disposal_method = gce->flag_disposal_method;
+        out->delay_ms = (UINT32)gce->delay_time * 10; /* GIF delays are 1/100 s */
+        if (image->image_descriptor.flag_color_table == 1 && image->local_color_table != NULL)
         {
-            return FALSE;
-        }
-
-        if (graphics->graphics.flag_transparency_used == 1)
-        {
-            if (image->local_color_table)
+            /* The frame gets its own copy: the parsed GIF is freed before the
+               animation is handed back, so a borrowed pointer would dangle. */
+            UINTN entries = (UINTN)1 << (image->image_descriptor.flag_table_size + 1);
+            out->palette = (GIF_COLOR_TABLE *)malloc(sizeof(GIF_COLOR_TABLE) * entries);
+            if (out->palette == NULL)
             {
-                transparency_color.r = image->local_color_table[graphics->graphics.transparent_color_index].r;
-                transparency_color.g = image->local_color_table[graphics->graphics.transparent_color_index].g;
-                transparency_color.b = image->local_color_table[graphics->graphics.transparent_color_index].b;
+                GIFParserClearAnimation(result);
+                return FALSE;
             }
-            else
-            {
-                transparency_color.r = gif->GlobalColorTable[graphics->graphics.transparent_color_index].r;
-                transparency_color.g = gif->GlobalColorTable[graphics->graphics.transparent_color_index].g;
-                transparency_color.b = gif->GlobalColorTable[graphics->graphics.transparent_color_index].b;
-            }
+            memcpy(out->palette, image->local_color_table, sizeof(GIF_COLOR_TABLE) * entries);
+            out->palette_entries = entries;
+        }
+        else
+        {
+            out->palette = result->global_palette;
+            out->palette_entries = result->global_palette_entries;
         }
 
-        printf("frame count: [%u]\n", frame_count);
-        printf("image data size = %u\n", sizeof(IMG_FRAME) * pixel_count);
-        printf("w = %u, h = %u, delay = %u, left = %u, top = %u\n", image->image_descriptor.width, image->image_descriptor.height, (*animation)->delays,
-               image->image_descriptor.left, image->image_descriptor.top);
-        if (graphics->graphics.flag_transparency_used == 1)
-            printf("transparency_color: %u %u %u\n", transparency_color.r, transparency_color.g, transparency_color.b);
-        if (gif->LogicalScreenDescriptor.flag_color_table == 1)
-            printf("bg_color: %u %u %u\n", bg_color.r, bg_color.g, bg_color.b);
+        UINTN rect_pixels = (UINTN)out->width * (UINTN)out->height;
+        printf("frame count: [%lu]\n", frame_count);
+        printf("w = %u, h = %u, left = %u, top = %u\n", image->image_descriptor.width,
+               image->image_descriptor.height, image->image_descriptor.left, image->image_descriptor.top);
 
-        // In gif every frame's image data depends on previous frame. change changed data, reserved out of changed data back ground color index flush;
-        UINTN global_part_index = 0;
-        for (UINTN row = 0; row < (*animation)->h; ++row)
+        if (rect_pixels == 0)
         {
-            for (UINTN col = 0; col < (*animation)->w; ++col)
-            {
-                if (col < image->image_descriptor.left || row < image->image_descriptor.top ||
-                    col > image->image_descriptor.left + image->image_descriptor.width - 1 ||
-                    row > image->image_descriptor.top + image->image_descriptor.height - 1)
-                {
-                    switch (graphics->graphics.flag_disposal_method)
-                    {
-                    // reserved previous frame pixels
-                    case 0x01:
-                    {
-                        if (frame_count == 0)
-                        {
-                            if (graphics->graphics.flag_transparency_used == 1)
-                            {
-                                color_index_list[row * (*animation)->w + col] = graphics->graphics.transparent_color_index;
-                            }
-                            else if (gif->LogicalScreenDescriptor.flag_color_table == 1)
-                            {
-                                color_index_list[row * (*animation)->w + col] = gif->LogicalScreenDescriptor.bg_color_index;
-                            }
-                        }
-                    }
-                    break;
-
-                    // repainted out of image range
-                    case 0x02:
-                    {
-                        if (graphics->graphics.flag_transparency_used == 1)
-                        {
-                            color_index_list[row * (*animation)->w + col] = graphics->graphics.transparent_color_index;
-                        }
-                        else if (gif->LogicalScreenDescriptor.flag_color_table == 1)
-                        {
-                            color_index_list[row * (*animation)->w + col] = gif->LogicalScreenDescriptor.bg_color_index;
-                        }
-                    }
-                    break;
-
-                    // 3~7
-                    default:
-                        break;
-                    }
-                }
-                else if (frame_count != 0)
-                {
-                    switch (graphics->graphics.flag_disposal_method)
-                    {
-                    // reserved transparent pixel as previous frame pixel
-                    case 0x01:
-                    {
-                        if (graphics->graphics.flag_transparency_used == 1 && graphics->graphics.transparent_color_index == changed_color_index_list[global_part_index])
-                        {
-                            if (color_index_kind[row * (*animation)->w + col] == GLOBAL_COLOR)
-                            {
-                                frame[row * (*animation)->w + col].r = gif->GlobalColorTable[color_index_list[row * (*animation)->w + col]].r;
-                                frame[row * (*animation)->w + col].g = gif->GlobalColorTable[color_index_list[row * (*animation)->w + col]].g;
-                                frame[row * (*animation)->w + col].b = gif->GlobalColorTable[color_index_list[row * (*animation)->w + col]].b;
-                            }
-                            else if (prev_image->image_descriptor.flag_color_table == 1)
-                            {
-                                frame[row * (*animation)->w + col].r = prev_image->local_color_table[color_index_list[row * (*animation)->w + col]].r;
-                                frame[row * (*animation)->w + col].g = prev_image->local_color_table[color_index_list[row * (*animation)->w + col]].g;
-                                frame[row * (*animation)->w + col].b = prev_image->local_color_table[color_index_list[row * (*animation)->w + col]].b;
-                            }
-                            else
-                            {
-                                frame[row * (*animation)->w + col].r = gif->GlobalColorTable[color_index_list[row * (*animation)->w + col]].r;
-                                frame[row * (*animation)->w + col].g = gif->GlobalColorTable[color_index_list[row * (*animation)->w + col]].g;
-                                frame[row * (*animation)->w + col].b = gif->GlobalColorTable[color_index_list[row * (*animation)->w + col]].b;
-                            }
-
-                            ++global_part_index;
-                            continue;
-                        }
-                        else
-                        {
-                            color_index_list[row * (*animation)->w + col] = changed_color_index_list[global_part_index];
-                            ++global_part_index;
-                        }
-                    }
-                    break;
-
-                    // repainted every pixels in image range
-                    case 0x02:
-                    {
-                        color_index_list[row * (*animation)->w + col] = changed_color_index_list[global_part_index];
-                        ++global_part_index;
-                    }
-                    break;
-
-                    // 0 && 3~7
-                    default:
-                        break;
-                    }
-                }
-                else
-                {
-                    color_index_list[row * (*animation)->w + col] = changed_color_index_list[global_part_index];
-                    ++global_part_index;
-                }
-
-                if (image->image_descriptor.flag_color_table == 1)
-                {
-                    frame[row * (*animation)->w + col].r = image->local_color_table[color_index_list[row * (*animation)->w + col]].r;
-                    frame[row * (*animation)->w + col].g = image->local_color_table[color_index_list[row * (*animation)->w + col]].g;
-                    frame[row * (*animation)->w + col].b = image->local_color_table[color_index_list[row * (*animation)->w + col]].b;
-                    color_index_kind[row * (*animation)->w + col] = LOCAL_COLOR;
-                }
-                else if (gif->LogicalScreenDescriptor.flag_color_table == 1)
-                {
-                    frame[row * (*animation)->w + col].r = gif->GlobalColorTable[color_index_list[row * (*animation)->w + col]].r;
-                    frame[row * (*animation)->w + col].g = gif->GlobalColorTable[color_index_list[row * (*animation)->w + col]].g;
-                    frame[row * (*animation)->w + col].b = gif->GlobalColorTable[color_index_list[row * (*animation)->w + col]].b;
-                    color_index_kind[row * (*animation)->w + col] = GLOBAL_COLOR;
-                }
-            }
+            out->pixels = NULL; /* an empty rectangle draws nothing */
+            goto next_frame;
         }
 
-        // interface (4 groups)
-        // Group0: every 8 lines, start by line 0
-        // Group1: every 8 lines, start by line 4
-        // Group2: every 4 lines, start by line 2
-        // Group3: every 2 lines, start by line 1
-        if (image->image_descriptor.flag_interlace == 1)
         {
-            IMG_FRAME *frame_raw = (IMG_FRAME *)malloc(sizeof(IMG_FRAME) * pixel_count);
-            UINTN interlace_frame_line = 0;
-            for (UINTN group = 0; group < 4; ++group)
+            /* Concatenate the data sub-block chain into one contiguous payload */
+            UINTN payload_size = image->one_frame_data.data_sub_block_buffer.total_data_size;
+            UINT8 *changed_data = (UINT8 *)malloc(payload_size ? payload_size : 1);
+            if (changed_data == NULL)
             {
-                UINTN current_line = 0;
-                UINTN step_line = 0;
-                switch (group)
-                {
-                case 0:
-                    current_line = 0;
-                    step_line = 8;
-                    break;
-                case 1:
-                    current_line = 4;
-                    step_line = 8;
-                    break;
-                case 2:
-                    current_line = 2;
-                    step_line = 4;
-                    break;
-                case 3:
-                    current_line = 1;
-                    step_line = 2;
-                    break;
-                default:
-                    printf("interface frame transform failed.\n");
-                    break;
-                }
-
-                // if you exchange `current_line` and `interlace_frame_line`, the image will be interlaced again.
-                while (current_line < (*animation)->h)
-                {
-                    for (UINTN col = 0; col < (*animation)->w; ++col)
-                    {
-                        frame_raw[current_line * (*animation)->w + col].r = frame[interlace_frame_line * (*animation)->w + col].r;
-                        frame_raw[current_line * (*animation)->w + col].g = frame[interlace_frame_line * (*animation)->w + col].g;
-                        frame_raw[current_line * (*animation)->w + col].b = frame[interlace_frame_line * (*animation)->w + col].b;
-                    }
-                    ++interlace_frame_line;
-                    current_line += step_line;
-                }
+                GIFParserClearAnimation(result);
+                return FALSE;
+            }
+            UINTN payload_used = 0;
+            for (GIF_DATA_SUB_BLOCK_NODE *p = image->one_frame_data.data_sub_block_buffer.header->next;
+                 p != NULL; p = p->next)
+            {
+                memcpy(changed_data + payload_used, p->data, p->data_size);
+                payload_used += p->data_size;
             }
 
-            free(frame);
-            frame = NULL;
-            frame = frame_raw;
+            /* lzw_decompress allocates the output buffer itself and hands it back
+               through the pointer argument, so this must NOT be pre-allocated:
+               passing a freshly malloc'd buffer here would leak it on every frame
+               (the callee overwrites the pointer without freeing it). */
+            UINT8 *index_buffer = NULL;
+            UINTN decoded = 0;
+            lzw_decompress(image->one_frame_data.LZW_Minimum_Code, payload_used, changed_data,
+                           rect_pixels, &decoded, &index_buffer);
+            printf("changed_data_index: %lu, changed_data_size: %lu, out_changed_data_size: %lu\n",
+                   payload_used, rect_pixels, decoded);
+            if (index_buffer == NULL)
+            {
+                free(changed_data);
+                GIFParserClearAnimation(result);
+                return FALSE;
+            }
+
+            /* A malformed or truncated frame may decode to fewer pixels than its
+               rectangle declares; the missing tail must not be undefined. */
+            if (decoded < rect_pixels)
+            {
+                printf("GIFParserGetAnimationFromGif: frame %lu decoded %lu of %lu pixels, padding with background.\n",
+                       frame_count, decoded, rect_pixels);
+                memset(index_buffer + decoded, _AnimationBackgroundIndex(result), rect_pixels - decoded);
+            }
+
+            out->pixels = index_buffer;
+            free(changed_data);
         }
 
-        (*animation)->delays[frame_count] = graphics->graphics.delay_time * 10;
-        (*animation)->frames[frame_count] = frame;
-        frame = NULL;
-        ++frame_count;
-        prev_image = image;
-        image = prev_image->next;
-        graphics = graphics->next;
-
-        free(changed_data);
-        changed_data = NULL;
-        free(changed_color_index_list);
-        changed_color_index_list = NULL;
+    next_frame:
+        image = image->next;
+        if (graphics != NULL)
+        {
+            graphics = graphics->next;
+        }
     }
 
-    free(color_index_list);
-    free(color_index_kind);
+    *animation = result;
     return TRUE;
 }
+
 
 BOOL GIFParserClearAnimation(IN IMG_ANIMATION *animation)
 {
     printf("Now function: GIFParserClearAnimation\n");
-    if (animation)
+    if (animation == NULL)
+    {
+        return FALSE;
+    }
+    if (animation->frames != NULL)
     {
         for (UINTN i = 0; i < animation->count; ++i)
         {
-            free(animation->frames[i]);
+            free(animation->frames[i].pixels);
+            animation->frames[i].pixels = NULL;
+            /* only the frames that own a private table free one: frames without
+               a table point at global_palette, which is released below */
+            if (animation->frames[i].palette != NULL &&
+                animation->frames[i].palette != animation->global_palette)
+            {
+                free(animation->frames[i].palette);
+                animation->frames[i].palette = NULL;
+            }
         }
-        if (animation->frames)
-            free(animation->frames);
-        if (animation->delays)
-            free(animation->delays);
-        free(animation);
+        free(animation->frames);
     }
+    free(animation->global_palette);
+    free(animation);
     return TRUE;
 }
 
 BOOL GIFParserGetGifDataFromFile(IN const CHAR *filename, OUT GIF **gif, OUT UINTN *buffer_size)
 {
     printf("Now Function: GIFParserGetGifDataFromFile\n");
-    CHAR *file_buffer = NULL;        // DO NOT FREE
-    CHAR *file_buffer_header = NULL; // free this free file_buffer
+    UINT8 *file_buffer = NULL; // owns the whole file
     UINTN file_size = 0;
-    CHAR c = 0;
-    FILE *src = fopen(filename, "rb");
+    FILE *src = NULL;
+
+    if (gif == NULL || buffer_size == NULL || filename == NULL)
+    {
+        printf("GIFParserGetGifDataFromFile: invalid argument.\n");
+        return FALSE;
+    }
+    *gif = NULL;
+    *buffer_size = 0;
+
+    // open and size first: the previous version called _GetFileSizeByByte(src)
+    // and fread() before checking whether fopen had even succeeded
+    src = fopen((const char *)filename, "rb");
+    if (src == NULL)
+    {
+        printf("GIFParserGetGifDataFromFile: cannot open \"%s\".\n", (const char *)filename);
+        return FALSE;
+    }
 
     file_size = _GetFileSizeByByte(src);
     *buffer_size = file_size;
-    file_buffer = (CHAR *)malloc(sizeof(CHAR) * file_size);
-    fread(file_buffer, file_size, 1, src);
-    file_buffer_header = file_buffer;
-    (*gif) = (GIF *)malloc(sizeof(GIF));
 
-    if (src == NULL || (*gif) == NULL || file_buffer == NULL)
+    // 6 byte header + 7 byte logical screen descriptor is the smallest thing that
+    // can even be called a GIF
+    if (file_size < 13)
     {
-        printf("GIFParserGetGifDataFromFile: pointer error.\n");
-        if (src == NULL)
-        {
-            printf("[file pointer]\n");
-        }
-        else if ((*gif) == NULL)
-        {
-            printf("[gif pointer]\n");
-        }
-        else
-        {
-            printf("[file buffer]\n");
-        }
+        printf("GIFParserGetGifDataFromFile: file too small (%lu bytes), not a GIF.\n", file_size);
+        fclose(src);
+        return FALSE;
+    }
+
+    file_buffer = (UINT8 *)malloc(file_size);
+    if (file_buffer == NULL)
+    {
+        printf("GIFParserGetGifDataFromFile: cannot allocate %lu byte buffer.\n", file_size);
+        fclose(src);
+        return FALSE;
+    }
+    if (fread(file_buffer, file_size, 1, src) != 1)
+    {
+        printf("GIFParserGetGifDataFromFile: short read.\n");
+        free(file_buffer);
+        fclose(src);
+        return FALSE;
+    }
+    fclose(src);
+
+    (*gif) = (GIF *)malloc(sizeof(GIF));
+    if ((*gif) == NULL)
+    {
+        printf("GIFParserGetGifDataFromFile: cannot allocate GIF structure.\n");
+        free(file_buffer);
         return FALSE;
     }
 
@@ -504,28 +424,42 @@ BOOL GIFParserGetGifDataFromFile(IN const CHAR *filename, OUT GIF **gif, OUT UIN
     (*gif)->ImageDataHeader->local_color_table = NULL;
 
     (*gif)->FramesCount = 0;
+    (*gif)->trailer_tail = NULL;
+    (*gif)->trailer_tail_size = 0;
 
     gAllocComponentCount = 1;
-    (*gif)->ComponentOrder.component = (GIF_COMPONENT *)malloc(gAllocComponentCount * ALLOC_COMPONENT_SIZE);
+    (*gif)->ComponentOrder.component = (GIF_COMPONENT *)malloc(gAllocComponentCount * ALLOC_COMPONENT_AMOUNT * sizeof(GIF_COMPONENT));
     (*gif)->ComponentOrder.size = 0;
 
     // Header Block 6 bytes
-    _GIFParserMemRead(&(*gif)->Header, (VOID **)&file_buffer, 6);
+    _GIF_READER reader;
+    _GIFReaderInit(&reader, file_buffer, file_size);
+    _GIFReaderCopy(&reader, &(*gif)->Header, 6);
 
-    if (strncmp((*gif)->Header.gif_signature, "GIF", 3) != 0)
+    if (strncmp((const char *)(*gif)->Header.gif_signature, "GIF", 3) != 0)
     {
         printf("GIFParserGetGifDataFromFile: this is not GIF file.\n");
+        free(file_buffer);
+        GIFParserClear(*gif);
+        *gif = NULL;
         return FALSE;
     }
 
-    if (strncmp((*gif)->Header.gif_version, "89a", 3) != 0)
+    // 87a files have no extensions but the block grammar is identical, so accept
+    // both revisions instead of rejecting perfectly readable files
+    if (strncmp((const char *)(*gif)->Header.gif_version, "87a", 3) != 0 &&
+        strncmp((const char *)(*gif)->Header.gif_version, "89a", 3) != 0)
     {
-        printf("GIFParserGetGifDataFromFile: GIF version not supported, use version \"89a\".\n");
+        printf("GIFParserGetGifDataFromFile: unsupported GIF revision \"%.3s\".\n",
+               (const char *)(*gif)->Header.gif_version);
+        free(file_buffer);
+        GIFParserClear(*gif);
+        *gif = NULL;
         return FALSE;
     }
 
     // Logical Screen Descriptor 7 Bytes
-    _GIFParserMemRead(&(*gif)->LogicalScreenDescriptor, (VOID **)&file_buffer, 7);
+    _GIFReaderCopy(&reader, &(*gif)->LogicalScreenDescriptor, 7);
 
     // Global color table
     (*gif)->GlobalColorTable = NULL;
@@ -533,26 +467,60 @@ BOOL GIFParserGetGifDataFromFile(IN const CHAR *filename, OUT GIF **gif, OUT UIN
     {
         UINT16 global_color_table_amount = 1 << ((*gif)->LogicalScreenDescriptor.flag_table_size + 1);
         (*gif)->GlobalColorTable = (GIF_COLOR_TABLE *)malloc(sizeof(GIF_COLOR_TABLE) * global_color_table_amount);
-        _GIFParserMemRead((*gif)->GlobalColorTable, (VOID **)&file_buffer, sizeof(GIF_COLOR_TABLE) * global_color_table_amount);
+        if ((*gif)->GlobalColorTable == NULL ||
+            !_GIFReaderCopy(&reader, (*gif)->GlobalColorTable, sizeof(GIF_COLOR_TABLE) * global_color_table_amount))
+        {
+            printf("GIFParserGetGifDataFromFile: truncated global color table.\n");
+            free(file_buffer);
+            GIFParserClear(*gif);
+            *gif = NULL;
+            return FALSE;
+        }
     }
 
     // Extensions and Image Data
     for (;;)
     {
-        _GIFParserMemRead(&c, (VOID **)&file_buffer, 1);
+        int c = _GIFReaderByte(&reader);
+
+        if (c < 0)
+        {
+            printf("GIFParserGetGifDataFromFile: unexpected end of file (no trailer).\n");
+            break;
+        }
 
         // 0x3B
         if (c == ';')
         {
             (*gif)->trailer = 0x3B;
-            goto done;
+            printf("GIFParserGetGifDataFromFile: trailer at offset %lu of %lu.\n",
+                   (unsigned long)(reader.pos - 1), (unsigned long)file_size);
+            /* Anything left after the trailer is recorded at the end of the parse
+               (see below), not here: a 0x3B can also appear inside block data, so
+               the byte that ends the document is the one the parse actually
+               stopped at, not necessarily the first 0x3B seen. */
+            break;
         }
 
         // 0x21
         if (c == '!')
         {
-            _GIFParserMemRead(&c, (VOID **)&file_buffer, 1);
-            _HandleExtension(&file_buffer, c, gif);
+            int label = _GIFReaderByte(&reader);
+            if (label < 0)
+            {
+                printf("GIFParserGetGifDataFromFile: truncated extension header.\n");
+                break;
+            }
+            if (!_HandleExtension(&reader, (CHAR)label, gif))
+            {
+                printf("GIFParserGetGifDataFromFile: extension %02X failed, stopping.\n", (unsigned)(UINT8)label);
+                break;
+            }
+            if (reader.bad)
+            {
+                printf("GIFParserGetGifDataFromFile: truncated extension data, stopping.\n");
+                break;
+            }
             continue;
         }
 
@@ -563,13 +531,38 @@ BOOL GIFParserGetGifDataFromFile(IN const CHAR *filename, OUT GIF **gif, OUT UIN
         }
 
         // Image Descriptor
-        _HandleImageData(&file_buffer, gif);
+        if (!_HandleImageData(&reader, gif) || reader.bad)
+        {
+            printf("GIFParserGetGifDataFromFile: image block failed at offset %lu of %lu, stopping.\n",
+                   (unsigned long)reader.pos, (unsigned long)reader.size);
+            break;
+        }
     }
 
-done:
-    free(file_buffer_header);
-    fclose(src);
+    if (reader.bad)
+    {
+        printf("GIFParserGetGifDataFromFile: file ended early, %lu frames recovered.\n",
+               (unsigned long)(*gif)->FramesCount);
+    }
 
+    /* Bytes the document did not consume (some encoders append data after the
+       trailer - 16dapipi.gif carries 16 of them) are kept so that a parse ->
+       rebuild round trip stays byte-exact. Recording this once, after the loop,
+       uses the parse's real end rather than the first 0x3B encountered. */
+    if (reader.pos < file_size)
+    {
+        UINTN tail = file_size - reader.pos;
+        (*gif)->trailer_tail = (CHAR *)malloc(tail);
+        if ((*gif)->trailer_tail != NULL)
+        {
+            memcpy((*gif)->trailer_tail, file_buffer + reader.pos, tail);
+            (*gif)->trailer_tail_size = tail;
+            printf("GIFParserGetGifDataFromFile: %lu byte(s) after the trailer preserved.\n",
+                   (unsigned long)tail);
+        }
+    }
+
+    free(file_buffer);
     return TRUE;
 }
 
@@ -659,8 +652,7 @@ UINT8 *GIFParserGetDataBufferFromGif(IN GIF *gif, IN UINTN buffer_size)
             if (g != NULL)
             {
                 memcpy(buffer + index, &g->graphics.header.introducer, 8);
-                index += 8;
-                g = g->next;
+                index += 8;                g = g->next;
             }
         }
         break;
@@ -708,135 +700,142 @@ UINT8 *GIFParserGetDataBufferFromGif(IN GIF *gif, IN UINTN buffer_size)
     memcpy(buffer + index, &gif->trailer, 1);
     index += 1;
 
-    printf("GIFParserGetDataBufferFromGif: index = %d\n", index);
+    // re-emit any bytes the file carried after the trailer
+    if (gif->trailer_tail != NULL && gif->trailer_tail_size > 0)
+    {
+        memcpy(buffer + index, gif->trailer_tail, gif->trailer_tail_size);
+        index += gif->trailer_tail_size;
+    }
+
+    printf("GIFParserGetDataBufferFromGif: index = %lu\n", index);
     return buffer;
+}
+
+// free every real node of a list that starts with a dummy sentinel head.
+// `free_node` may release node-owned resources (the image nodes own a local
+// color table) and runs *before* the node itself is freed.
+static void _GIFListDestroy(IN void *head, IN UINTN next_offset, IN void (*free_node)(void *))
+{
+    UINT8 *node = (head != NULL) ? *(UINT8 **)((UINT8 *)head + next_offset) : NULL;
+    while (node != NULL)
+    {
+        UINT8 *following = *(UINT8 **)(node + next_offset);
+        if (free_node != NULL)
+        {
+            free_node(node);
+        }
+        free(node);
+        node = following;
+    }
+    free(head); // the sentinel itself
+}
+
+static void _GIFSubBlockChainFree(IN void *head);
+
+// image nodes own their local color table *and* their compressed data sub-block
+// chain; the old code freed the previous node's table while stepping, which
+// leaked the table of every frame but the last (16dapipi.gif leaks 108 per parse)
+static void _GIFImageNodeFree(IN void *node)
+{
+    GIF_IMAGE_DATA *image = (GIF_IMAGE_DATA *)node;
+    free(image->local_color_table);
+    image->local_color_table = NULL;
+    _GIFSubBlockChainFree(image->one_frame_data.data_sub_block_buffer.header);
+    image->one_frame_data.data_sub_block_buffer.header = NULL;
+}
+
+static void _GIFSubBlockChainFree(IN void *head)
+{
+    GIF_DATA_SUB_BLOCK_NODE *p = (GIF_DATA_SUB_BLOCK_NODE *)head;
+    while (p != NULL)
+    {
+        GIF_DATA_SUB_BLOCK_NODE *q = p->next;
+        free(p);
+        p = q;
+    }
+}
+
+static void _GIFCommentNodeFree(IN void *node)
+{
+    _GIFSubBlockChainFree(((GIF_COMMENT_EXT_DATA *)node)->comment.data_sub_block_buffer.header);
+}
+
+static void _GIFAppNodeFree(IN void *node)
+{
+    _GIFSubBlockChainFree(((GIF_APP_EXT_DATA *)node)->app.data_sub_block_buffer.header);
+}
+
+static void _GIFGraphicsNodeFree(IN void *node)
+{
+    (void)node;
 }
 
 BOOL GIFParserClear(IN GIF *gif)
 {
+    if (gif == NULL)
+    {
+        return FALSE;
+    }
     printf("Now function: GIFParserClear\n");
-    if (gif->ImageDataHeader != NULL)
-    {
-        GIF_IMAGE_DATA *b = gif->ImageDataHeader;
-        GIF_IMAGE_DATA *d = b->next;
 
-        while (d != NULL)
-        {
-            GIF_DATA_SUB_BLOCK_NODE *p = d->one_frame_data.data_sub_block_buffer.header;
-            GIF_DATA_SUB_BLOCK_NODE *q = p->next;
+    _GIFListDestroy(gif->ImageDataHeader, offsetof(GIF_IMAGE_DATA, next), _GIFImageNodeFree);
+    _GIFListDestroy(gif->CommentExtHeader, offsetof(GIF_COMMENT_EXT_DATA, next), _GIFCommentNodeFree);
+    _GIFListDestroy(gif->AppExtHeader, offsetof(GIF_APP_EXT_DATA, next), _GIFAppNodeFree);
+    _GIFListDestroy(gif->GraphicsExtHeader, offsetof(GIF_GRAPHICS_EXT_DATA, next), _GIFGraphicsNodeFree);
 
-            while (q != NULL)
-            {
-                free(p);
-                p = q;
-                q = q->next;
-            }
-            free(p);
-
-            if (b->local_color_table)
-            {
-                free(b->local_color_table);
-            }
-
-            free(b);
-            b = d;
-            d = d->next;
-        }
-        free(b);
-    }
-
-    if (gif->CommentExtHeader)
-    {
-        GIF_COMMENT_EXT_DATA *c = gif->CommentExtHeader;
-        GIF_COMMENT_EXT_DATA *v = c->next;
-
-        while (v != NULL)
-        {
-            GIF_DATA_SUB_BLOCK_NODE *p = v->comment.data_sub_block_buffer.header;
-            GIF_DATA_SUB_BLOCK_NODE *q = p->next;
-
-            while (q != NULL)
-            {
-                free(p);
-                p = q;
-                q = q->next;
-            }
-            free(p);
-
-            free(c);
-            c = v;
-            v = v->next;
-        }
-        free(c);
-    }
-
-    if (gif->AppExtHeader)
-    {
-        GIF_APP_EXT_DATA *a = gif->AppExtHeader;
-        GIF_APP_EXT_DATA *s = a->next;
-
-        while (s != NULL)
-        {
-            GIF_DATA_SUB_BLOCK_NODE *p = s->app.data_sub_block_buffer.header;
-            GIF_DATA_SUB_BLOCK_NODE *q = p->next;
-
-            while (q != NULL)
-            {
-                free(p);
-                p = q;
-                q = q->next;
-            }
-            free(p);
-
-            free(a);
-            a = s;
-            s = s->next;
-        }
-        free(a);
-    }
-
-    if (gif->GraphicsExtHeader)
-    {
-        GIF_GRAPHICS_EXT_DATA *g = gif->GraphicsExtHeader;
-        GIF_GRAPHICS_EXT_DATA *h = g->next;
-        while (h != NULL)
-        {
-            free(g);
-            g = h;
-            h = h->next;
-        }
-        free(g);
-    }
-
-    if (gif->ComponentOrder.component != NULL)
-    {
-        free(gif->ComponentOrder.component);
-    }
-
-    if (gif->GlobalColorTable)
-        free(gif->GlobalColorTable);
-    if (gif)
-        free(gif);
+    free(gif->ComponentOrder.component);
+    free(gif->GlobalColorTable);
+    free(gif->trailer_tail);
+    free(gif);
     return TRUE;
 }
 
-BOOL _GIFParserMemRead(OUT VOID *dst, IN VOID **src, IN UINT32 size)
+// scan a data sub-block chain: [size][data...]...[0x00]
+// returns the number of payload bytes skipped, or (UINTN)-1 if the chain never
+// terminated (the file is truncated; the caller must treat it as an error)
+BOOL _SkipDataSubBlocks(IN OUT _GIF_READER *r)
 {
-    VOID *buffer = memcpy(dst, *src, size);
-    *src += size;
-    if (buffer != NULL)
-        return TRUE;
-    return FALSE;
+    UINTN skipped = 0;
+
+    for (;;)
+    {
+        int size = _GIFReaderByte(r);
+        if (size < 0)
+        {
+            return FALSE; // ran out of file before the terminator
+        }
+        if (size == 0)
+        {
+            return TRUE; // terminator
+        }
+        if (!_GIFReaderSkip(r, (UINTN)size))
+        {
+            return FALSE;
+        }
+        skipped += (UINTN)size;
+    }
 }
 
-BOOL _HandleExtension(IN CHAR **src, IN CHAR label, OUT GIF **gif)
+BOOL _HandleExtension(IN OUT _GIF_READER *r, IN CHAR label, OUT GIF **gif)
 {
-    UINT8 size = 0;
+    int byte = 0;
 
     switch (label)
     {
-    case 0x01: // Plain Text Extension
-        break;
+    case 0x01: // Plain Text Extension - GIF89a, "this feature never took off"
+    {
+        // fixed header: [size=12][left,top,width,height][cell w,h][fg,bg color]
+        // then the text itself follows as a data sub-block chain.
+        // We do not render text, but the bytes must still be consumed, otherwise
+        // the main loop would mistake them for the next block introducer.
+        byte = _GIFReaderByte(r);
+        if (byte < 0 || !_GIFReaderSkip(r, (UINTN)byte) || !_SkipDataSubBlocks(r))
+        {
+            printf("_HandleExtension[0x01]: truncated Plain Text Extension.\n");
+            return FALSE;
+        }
+        return TRUE;
+    }
 
     case 0xFF: // Application Extension  19bytes
     {
@@ -846,42 +845,81 @@ BOOL _HandleExtension(IN CHAR **src, IN CHAR label, OUT GIF **gif)
             return FALSE;
         }
 
+        // [size=11][identifier 8][auth 3] then the sub-block chain
+        byte = _GIFReaderByte(r);
+        if (byte < 0)
+        {
+            printf("_HandleExtension[0xFF]: truncated application header.\n");
+            return FALSE;
+        }
+
         GIF_APP_EXT_DATA *new_app_node = (GIF_APP_EXT_DATA *)malloc(sizeof(GIF_APP_EXT_DATA));
-        new_app_node->next = NULL;
-        new_app_node->app.data_sub_block_buffer.total_data_size = 0;
+        if (new_app_node == NULL)
+        {
+            return FALSE;
+        }
+        memset(new_app_node, 0, sizeof(GIF_APP_EXT_DATA));
         new_app_node->app.data_sub_block_buffer.header = (GIF_DATA_SUB_BLOCK_NODE *)malloc(sizeof(GIF_DATA_SUB_BLOCK_NODE));
+        if (new_app_node->app.data_sub_block_buffer.header == NULL)
+        {
+            free(new_app_node);
+            return FALSE;
+        }
         GIF_DATA_SUB_BLOCK_NODE *p = new_app_node->app.data_sub_block_buffer.header;
         p->next = NULL;
 
         new_app_node->app.header.introducer = 0x21;
         new_app_node->app.header.label = 0xFF;
-        _GIFParserMemRead(&new_app_node->app.size, (VOID **)src, 12);
-        _GIFParserMemRead(&size, (VOID **)src, 1);
-
-        while (size > 0)
+        new_app_node->app.size = (UINT8)byte;
+        if (!_GIFReaderCopy(r, &new_app_node->app.identifier, sizeof(new_app_node->app.identifier) +
+                                                                  sizeof(new_app_node->app.authentication_code)))
         {
-            GIF_DATA_SUB_BLOCK_NODE *new_node = (GIF_DATA_SUB_BLOCK_NODE *)malloc(sizeof(GIF_DATA_SUB_BLOCK_NODE));
-            new_node->data_size = size;
-            new_node->next = NULL;
-            new_app_node->app.data_sub_block_buffer.total_data_size += size;
-            _GIFParserMemRead(new_node->data, (VOID **)src, size);
-            _GIFParserMemRead(&size, (VOID **)src, 1);
-            p->next = new_node;
-            p = p->next;
-        }
-
-        if (size == 0)
-        {
-            new_app_node->app.terminator = 0;
-            gTailerPointer.app->next = new_app_node;
-            gTailerPointer.app = new_app_node;
-            _RecordComponentOrder(kAppExt, gif);
-        }
-        else
-        {
-            printf("_HandleExtension[0xFF]: Load Error.\n");
+            printf("_HandleExtension[0xFF]: truncated application identifier.\n");
+            free(p);
+            free(new_app_node);
             return FALSE;
         }
+
+        for (;;)
+        {
+            int size = _GIFReaderByte(r);
+            if (size < 0)
+            {
+                printf("_HandleExtension[0xFF]: truncated data sub-block.\n");
+                free(p);
+                free(new_app_node);
+                return FALSE;
+            }
+            if (size == 0)
+            {
+                break;
+            }
+            GIF_DATA_SUB_BLOCK_NODE *new_node = (GIF_DATA_SUB_BLOCK_NODE *)malloc(sizeof(GIF_DATA_SUB_BLOCK_NODE));
+            if (new_node == NULL)
+            {
+                free(p);
+                free(new_app_node);
+                return FALSE;
+            }
+            new_node->data_size = (UINT8)size;
+            new_node->next = NULL;
+            if (!_GIFReaderCopy(r, new_node->data, (UINTN)size))
+            {
+                printf("_HandleExtension[0xFF]: truncated data sub-block payload.\n");
+                free(new_node);
+                free(p);
+                free(new_app_node);
+                return FALSE;
+            }
+            new_app_node->app.data_sub_block_buffer.total_data_size += (UINTN)size;
+            p->next = new_node;
+            p = new_node;
+        }
+
+        new_app_node->app.terminator = 0;
+        gTailerPointer.app->next = new_app_node;
+        gTailerPointer.app = new_app_node;
+        _RecordComponentOrder(kAppExt, gif);
         return TRUE;
     }
 
@@ -893,43 +931,67 @@ BOOL _HandleExtension(IN CHAR **src, IN CHAR label, OUT GIF **gif)
             return FALSE;
         }
         GIF_COMMENT_EXT_DATA *new_com_node = (GIF_COMMENT_EXT_DATA *)malloc(sizeof(GIF_COMMENT_EXT_DATA));
-        new_com_node->next = NULL;
-        new_com_node->comment.data_sub_block_buffer.total_data_size = 0;
+        if (new_com_node == NULL)
+        {
+            return FALSE;
+        }
+        memset(new_com_node, 0, sizeof(GIF_COMMENT_EXT_DATA));
         new_com_node->comment.data_sub_block_buffer.header = (GIF_DATA_SUB_BLOCK_NODE *)malloc(sizeof(GIF_DATA_SUB_BLOCK_NODE));
+        if (new_com_node->comment.data_sub_block_buffer.header == NULL)
+        {
+            free(new_com_node);
+            return FALSE;
+        }
         GIF_DATA_SUB_BLOCK_NODE *p = new_com_node->comment.data_sub_block_buffer.header;
         p->next = NULL;
 
         new_com_node->comment.header.introducer = 0x21;
         new_com_node->comment.header.label = 0xFE;
-        _GIFParserMemRead(&size, (VOID **)src, 1);
-        while (size > 0)
+
+        for (;;)
         {
+            int size = _GIFReaderByte(r);
+            if (size < 0)
+            {
+                printf("_HandleExtension[0xFE]: truncated data sub-block.\n");
+                free(p);
+                free(new_com_node);
+                return FALSE;
+            }
+            if (size == 0)
+            {
+                break;
+            }
             GIF_DATA_SUB_BLOCK_NODE *new_node = (GIF_DATA_SUB_BLOCK_NODE *)malloc(sizeof(GIF_DATA_SUB_BLOCK_NODE));
-            new_node->data_size = size;
+            if (new_node == NULL)
+            {
+                free(p);
+                free(new_com_node);
+                return FALSE;
+            }
+            new_node->data_size = (UINT8)size;
             new_node->next = NULL;
-            new_com_node->comment.data_sub_block_buffer.total_data_size += size;
-            _GIFParserMemRead(new_node->data, (VOID **)src, size);
-            _GIFParserMemRead(&size, (VOID **)src, 1);
+            if (!_GIFReaderCopy(r, new_node->data, (UINTN)size))
+            {
+                printf("_HandleExtension[0xFE]: truncated data sub-block payload.\n");
+                free(new_node);
+                free(p);
+                free(new_com_node);
+                return FALSE;
+            }
+            new_com_node->comment.data_sub_block_buffer.total_data_size += (UINTN)size;
             p->next = new_node;
-            p = p->next;
+            p = new_node;
         }
 
-        if (size == 0)
-        {
-            new_com_node->comment.terminator = 0;
-            gTailerPointer.comment->next = new_com_node;
-            gTailerPointer.comment = new_com_node;
-            _RecordComponentOrder(kCommentExt, gif);
-        }
-        else
-        {
-            printf("_HandleExtension[0xFE]: Load Error.\n");
-            return FALSE;
-        }
+        new_com_node->comment.terminator = 0;
+        gTailerPointer.comment->next = new_com_node;
+        gTailerPointer.comment = new_com_node;
+        _RecordComponentOrder(kCommentExt, gif);
         return TRUE;
     }
 
-    case 0xF9: // Graphic Control Extension
+    case 0xF9: // Graphic Control Extension - 8 bytes: 21 F9 size packed delayLo delayHi tindex 00
     {
         if (gTailerPointer.graphics == NULL || gTailerPointer.graphics->next != NULL)
         {
@@ -937,11 +999,46 @@ BOOL _HandleExtension(IN CHAR **src, IN CHAR label, OUT GIF **gif)
             return FALSE;
         }
 
-        GIF_GRAPHICS_EXT_DATA *new_graphics_node = (GIF_GRAPHICS_EXT_DATA *)malloc(sizeof(GIF_GRAPHICS_EXT_DATA)); // one frame
-        new_graphics_node->next = NULL;
-        new_graphics_node->graphics.header.introducer = 0x21;
-        new_graphics_node->graphics.header.label = 0xF9;
-        _GIFParserMemRead(&new_graphics_node->graphics.size, (VOID **)src, 6); // Graphics control extension
+        byte = _GIFReaderByte(r); // block size, must be 4
+        if (byte < 0)
+        {
+            printf("_HandleExtension[0xF9]: truncated graphic control extension.\n");
+            return FALSE;
+        }
+        if (byte != 4)
+        {
+            printf("_HandleExtension[0xF9]: block size %d, expected 4; stopping.\n", byte);
+            return FALSE;
+        }
+
+        // payload: packed, delay lo, delay hi, transparent index, terminator
+        UINT8 payload[5];
+        if (!_GIFReaderCopy(r, payload, sizeof(payload)))
+        {
+            printf("_HandleExtension[0xF9]: truncated graphic control extension payload.\n");
+            return FALSE;
+        }
+
+        GIF_GRAPHICS_EXT_DATA *new_graphics_node = (GIF_GRAPHICS_EXT_DATA *)malloc(sizeof(GIF_GRAPHICS_EXT_DATA));
+        if (new_graphics_node == NULL)
+        {
+            return FALSE;
+        }
+        memset(new_graphics_node, 0, sizeof(GIF_GRAPHICS_EXT_DATA));
+
+        GIF_GRAPHICS_CONTROL_EXTENSION *g = &new_graphics_node->graphics;
+        UINT8 packed = payload[0];
+        g->header.introducer = 0x21;
+        g->header.label = 0xF9;
+        g->size = 4;
+        g->flag_transparency_used = packed & 0x01;
+        g->flag_input = (packed >> 1) & 0x01;
+        g->flag_disposal_method = (packed >> 2) & 0x07;
+        g->flag_reserved = (packed >> 5) & 0x07;
+        g->delay_time = (UINT16)((UINT16)payload[1] | ((UINT16)payload[2] << 8));
+        g->transparent_color_index = payload[3];
+        g->terminator = payload[4];
+
         gTailerPointer.graphics->next = new_graphics_node;
         gTailerPointer.graphics = new_graphics_node;
         _RecordComponentOrder(kGraphicsExt, gif);
@@ -950,15 +1047,22 @@ BOOL _HandleExtension(IN CHAR **src, IN CHAR label, OUT GIF **gif)
     }
 
     default:
-        break;
+    {
+        // Unknown extension label: we cannot interpret it, but the generic block
+        // grammar (label + data sub-block chain + 0x00) still holds, so skip it
+        // instead of walking off into the payload bytes.
+        if (!_SkipDataSubBlocks(r))
+        {
+            printf("_HandleExtension[0x%02X]: truncated unknown extension.\n", (unsigned)(UINT8)label);
+            return FALSE;
+        }
+        return TRUE;
+    }
     }
 }
 
-BOOL _HandleImageData(IN CHAR **src, OUT GIF **gif)
+BOOL _HandleImageData(IN OUT _GIF_READER *r, OUT GIF **gif)
 {
-    UINTN size = 0;
-    *src -= 1; // already read ','  -> 0x2C
-
     if (gTailerPointer.image == NULL || gTailerPointer.image->next != NULL)
     {
         printf("gTailerPointer.image error\n");
@@ -966,47 +1070,116 @@ BOOL _HandleImageData(IN CHAR **src, OUT GIF **gif)
     }
 
     GIF_IMAGE_DATA *new_image_node = (GIF_IMAGE_DATA *)malloc(sizeof(GIF_IMAGE_DATA));
-    new_image_node->next = NULL;
-    new_image_node->local_color_table = NULL;
-    new_image_node->one_frame_data.data_sub_block_buffer.total_data_size = 0;
+    if (new_image_node == NULL)
+    {
+        return FALSE;
+    }
+    memset(new_image_node, 0, sizeof(GIF_IMAGE_DATA));
     new_image_node->one_frame_data.data_sub_block_buffer.header = (GIF_DATA_SUB_BLOCK_NODE *)malloc(sizeof(GIF_DATA_SUB_BLOCK_NODE));
+    if (new_image_node->one_frame_data.data_sub_block_buffer.header == NULL)
+    {
+        free(new_image_node);
+        return FALSE;
+    }
     GIF_DATA_SUB_BLOCK_NODE *p = new_image_node->one_frame_data.data_sub_block_buffer.header;
     p->next = NULL;
 
-    _GIFParserMemRead(&new_image_node->image_descriptor, (VOID **)src, 10); // Image descriptor
+    // Image descriptor body: the 0x2C introducer was consumed by the caller, so
+    // 9 bytes remain (left, top, width, height, packed). The packed byte is made
+    // of bit-fields, so the fields are unpacked explicitly.
+    UINT8 descriptor[9];
+    if (!_GIFReaderCopy(r, descriptor, sizeof(descriptor)))
+    {
+        printf("_HandleImageData: truncated image descriptor.\n");
+        free(p);
+        free(new_image_node);
+        return FALSE;
+    }
+    {
+        GIF_IMAGE_DESCRIPTOR *d = &new_image_node->image_descriptor;
+        d->introducer = 0x2C;
+        d->left = (UINT16)(descriptor[0] | (descriptor[1] << 8));
+        d->top = (UINT16)(descriptor[2] | (descriptor[3] << 8));
+        d->width = (UINT16)(descriptor[4] | (descriptor[5] << 8));
+        d->height = (UINT16)(descriptor[6] | (descriptor[7] << 8));
+        UINT8 packed = descriptor[8];
+        d->flag_table_size = packed & 0x07;
+        d->flag_sort = (packed >> 5) & 0x01;
+        d->flag_interlace = (packed >> 6) & 0x01;
+        d->flag_color_table = (packed >> 7) & 0x01;
+        d->flag_reserved = 0;
+    }
+
     if (new_image_node->image_descriptor.flag_color_table == 1)
     { // local color table
         UINT16 local_color_table_amount = 1 << (new_image_node->image_descriptor.flag_table_size + 1);
         new_image_node->local_color_table = (GIF_COLOR_TABLE *)malloc(sizeof(GIF_COLOR_TABLE) * local_color_table_amount);
-        _GIFParserMemRead(new_image_node->local_color_table, (VOID **)src, sizeof(GIF_COLOR_TABLE) * local_color_table_amount);
-    }
-    _GIFParserMemRead(&new_image_node->one_frame_data.LZW_Minimum_Code, (VOID **)src, 1); // one frame data: LZW_Minimum_Code
-    _GIFParserMemRead(&size, (VOID **)src, 1);                                            // size is data_size
-    while (size > 0)
-    { // one frame data: data_sub_block_buffer
-        GIF_DATA_SUB_BLOCK_NODE *new_node = (GIF_DATA_SUB_BLOCK_NODE *)malloc(sizeof(GIF_DATA_SUB_BLOCK_NODE));
-        new_node->next = NULL;
-        new_node->data_size = size;
-        new_image_node->one_frame_data.data_sub_block_buffer.total_data_size += size;
-        _GIFParserMemRead(new_node->data, (VOID **)src, size);
-        p->next = new_node;
-        p = p->next;
-        _GIFParserMemRead(&size, (VOID **)src, 1);
+        if (new_image_node->local_color_table == NULL ||
+            !_GIFReaderCopy(r, new_image_node->local_color_table, sizeof(GIF_COLOR_TABLE) * local_color_table_amount))
+        {
+            printf("_HandleImageData: truncated local color table.\n");
+            free(new_image_node->local_color_table);
+            free(p);
+            free(new_image_node);
+            return FALSE;
+        }
     }
 
-    if (size == 0)
-    { // one frame data: terminator, the last size is terminator = 0
-        new_image_node->one_frame_data.terminator = 0;
-        gTailerPointer.image->next = new_image_node;
-        gTailerPointer.image = new_image_node;
-        ++((*gif)->FramesCount);
-        _RecordComponentOrder(kImageData, gif);
-    }
-    else
+    int size = _GIFReaderByte(r); // LZW_Minimum_Code
+    if (size < 0)
     {
-        printf("_HandleImageData: Load Image Data Error.\n");
+        printf("_HandleImageData: missing LZW minimum code size.\n");
+        free(new_image_node->local_color_table);
+        free(p);
+        free(new_image_node);
         return FALSE;
     }
+    new_image_node->one_frame_data.LZW_Minimum_Code = (UINT8)size;
+
+    for (;;)
+    { // one frame data: data_sub_block_buffer
+        size = _GIFReaderByte(r);
+        if (size < 0)
+        {
+            printf("_HandleImageData: truncated image data sub-block.\n");
+            free(new_image_node->local_color_table);
+            free(p);
+            free(new_image_node);
+            return FALSE;
+        }
+        if (size == 0)
+        {
+            break; // terminator
+        }
+        GIF_DATA_SUB_BLOCK_NODE *new_node = (GIF_DATA_SUB_BLOCK_NODE *)malloc(sizeof(GIF_DATA_SUB_BLOCK_NODE));
+        if (new_node == NULL)
+        {
+            free(new_image_node->local_color_table);
+            free(p);
+            free(new_image_node);
+            return FALSE;
+        }
+        new_node->next = NULL;
+        new_node->data_size = (UINT8)size;
+        if (!_GIFReaderCopy(r, new_node->data, (UINTN)size))
+        {
+            printf("_HandleImageData: truncated image data payload.\n");
+            free(new_node);
+            free(new_image_node->local_color_table);
+            free(p);
+            free(new_image_node);
+            return FALSE;
+        }
+        new_image_node->one_frame_data.data_sub_block_buffer.total_data_size += (UINTN)size;
+        p->next = new_node;
+        p = new_node;
+    }
+
+    new_image_node->one_frame_data.terminator = 0;
+    gTailerPointer.image->next = new_image_node;
+    gTailerPointer.image = new_image_node;
+    ++((*gif)->FramesCount);
+    _RecordComponentOrder(kImageData, gif);
 
     return TRUE;
 }
@@ -1016,7 +1189,7 @@ VOID _RecordComponentOrder(IN GIF_COMPONENT key, OUT GIF **gif)
     if (gAllocComponentCount * ALLOC_COMPONENT_AMOUNT - (*gif)->ComponentOrder.size < 10)
     {
         ++gAllocComponentCount;
-        (*gif)->ComponentOrder.component = (GIF_COMPONENT *)realloc((*gif)->ComponentOrder.component, gAllocComponentCount * ALLOC_COMPONENT_SIZE);
+        (*gif)->ComponentOrder.component = (GIF_COMPONENT *)realloc((*gif)->ComponentOrder.component, gAllocComponentCount * ALLOC_COMPONENT_AMOUNT * sizeof(GIF_COMPONENT));
     }
     (*gif)->ComponentOrder.component[(*gif)->ComponentOrder.size] = key;
     ++((*gif)->ComponentOrder.size);
@@ -1027,7 +1200,7 @@ UINTN _GetFileSizeByByte(IN FILE *fp)
     UINTN file_size = 0;
     if (fp == NULL)
     {
-        printf("GetFileSizeByByte: fp is NULL.\n");
+        return 0;
     }
 
     fseek(fp, 0, SEEK_END);
@@ -1040,7 +1213,11 @@ UINTN _GetFileSizeByByte(IN FILE *fp)
 VOID _PrintBuffer(IN CHAR *buffer, IN UINTN len)
 {
     FILE *fp = fopen("log", "ab");
-    for (int i = 0; i < len; ++i)
+    if (fp == NULL)
+    {
+        return;
+    }
+    for (UINTN i = 0; i < len; ++i)
     {
         fwrite(buffer + i, 1, 1, fp);
     }
