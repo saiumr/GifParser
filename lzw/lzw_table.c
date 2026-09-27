@@ -163,6 +163,35 @@ int lzw_table_lookup_code(struct lzw_table *t,
   return 0;
 }
 
+/* Expand `code` into `dst` and return its length (0 if the code is invalid).
+ *
+ * Semantics are identical to lzw_table_str, but the bytes are written straight
+ * into a caller-owned buffer instead of a throw-away darray. The old version
+ * allocated and freed one darray per expanded code - one malloc/free pair for
+ * every code in the stream, which for a 268x384 frame is hundreds of thousands
+ * of allocations.
+ *
+ * The entry chain is walked from the tail towards the head, so the bytes land in
+ * dst in REVERSE order and the caller must flip them. */
+unsigned long lzw_table_expand(struct lzw_table *t,
+                               unsigned int code,
+                               unsigned char *dst,
+                               unsigned long cap) {
+  struct lzw_entry e;
+  unsigned long len, n = 0;
+
+  if (!t || !dst || cap == 0) return 0;
+  if (!lzw_table_lookup_code(t, code, &e)) return 0;
+
+  len = e.len;
+  if (len > cap) len = cap; /* never write past the caller's stack buffer */
+  for (n = 0; n < len; ++n) {
+    dst[n] = e.val;
+    if (!lzw_table_lookup_code(t, e.prev, &e)) break;
+  }
+  return n;
+}
+
 void lzw_table_str(struct lzw_table *t,
                    unsigned int code,
                    struct darray **out_buf) {
@@ -189,6 +218,8 @@ unsigned char lzw_entry_head(struct lzw_table *t, struct lzw_entry *e) {
   if (!t) return 0;
   if (!e) return 0;
   tmp = *e;
+  result = tmp.val; /* a zero-length walk must still return the entry's own byte,
+                       not an uninitialised stack slot */
   len = tmp.len;
   while (len--) {
     result = tmp.val;

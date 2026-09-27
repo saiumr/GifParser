@@ -92,6 +92,7 @@ void lzw_compress_gif(unsigned char bit_size,
 void lzw_decompress(unsigned char bit_size,
                     unsigned long size,
                     unsigned char *src,
+                    unsigned long expected_size,
                     unsigned long *out_len,
                     unsigned char **result) {
   unsigned char bit_width = bit_size + 1;
@@ -99,11 +100,17 @@ void lzw_decompress(unsigned char bit_size,
   struct lzw_bit_reader b;
   struct lzw_table dtable;
   struct darray *output;
+  /* Reordering buffer for one expanded code. A code can expand to at most
+     LZW_MAX_ENTRIES literals (4096 for 12-bit codes), and keeping it on the stack
+     removes the per-code allocation the old lzw_table_str performed. */
+  unsigned char stack[LZW_MAX_ENTRIES];
 
   if (!src) return;
   if (!result) return;
   if (!out_len) return;
-  output = danew(4096);
+
+  /* expected_size pre-sizes the output so it never has to grow and copy */
+  output = danew(expected_size ? expected_size : 4096);
   lzw_table_init(&dtable, LZW_TABLE_DECOMPRESS, bit_size);
   lzw_br_init(&b, BIT_BUFFER, size, src);
   while (lzw_br_read(&b, bit_width, &code)) {
@@ -119,15 +126,14 @@ void lzw_decompress(unsigned char bit_size,
     if (code == (1 << bit_size) + 1) break;
     if (lzw_table_lookup_code(&dtable, code, &cur)) {
       unsigned int next_code;
-      unsigned long i;
-      struct darray *buf;
+      unsigned long n, i;
       struct lzw_entry new, next;
 
-      lzw_table_str(&dtable, code, &buf);
-      for (i = dalen(buf); i > 0; --i) {
-        dapush(output, daptr(buf)[i -1 ]);
+      /* expand the code straight into the stack buffer (reverse order) */
+      n = lzw_table_expand(&dtable, code, stack, sizeof(stack));
+      for (i = n; i > 0; --i) {
+        dapush(output, stack[i - 1]);
       }
-      dafree(buf);
       if ((dtable.n_entries + 1 > (1 << bit_width)) &&
           (bit_width < LZW_MAX_ENTRY_EXP)) {
         bit_width++;
